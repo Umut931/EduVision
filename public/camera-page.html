@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Caméra - Gestion Salle 210</title>
+    <meta name="theme-color" content="#0B3A8A">
+    <link rel="icon" type="image/png" href="/logo.png">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="camera-page-container" class="container-plein-ecran">
+        <div id="contenu-plein-ecran" class="contenu-plein-ecran"></div>
+    </div>
+    <script src="camera.js"></script>
+    <script>
+      // Affiche la caméra automatiquement à l'ouverture de la page
+      window.onload = function() {
+        if (typeof afficherCamera === 'function') {
+          afficherCamera();
+        }
+      };
+    </script>
+</body>
+</html>

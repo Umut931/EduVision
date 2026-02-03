@@ -4,9 +4,9 @@ let cameraActive = false;
 let photosCapturees = [];
 
 function afficherCamera() {
-    entrerModePleinEcran('📷 Caméra');
+    // Si la page contient container-plein-ecran (index) : mode normal, sinon (camera-page.html) : mode direct
     const contenu = document.getElementById('contenu-plein-ecran');
-    
+    if (!contenu) return;
     contenu.innerHTML = `
         <h2>Caméra Live 🔴</h2>
         <div class="camera-container">
@@ -19,8 +19,6 @@ function afficherCamera() {
             </div>
         </div>
     `;
-    
-    // Démarrer la caméra
     demarrerCamera();
 }
 
