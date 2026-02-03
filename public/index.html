@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gestion Salle 210</title>
+    <meta name="theme-color" content="#0B3A8A">
+    <link rel="icon" type="image/png" href="/logo.png">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Page de connexion -->
+    <div id="login-container" class="login-container">
+        <div class="login-box">
+            <div class="login-header">
+                <img src="/logo.png" alt="Logo" class="logo-img">
+                <h1>🔐 Gestionnaire Salle</h1>
+                <p>Authentification requise</p>
+            </div>
+            <form onsubmit="verifierMotDePasse(event)" class="login-form">
+                <div class="form-group">
+                    <label for="password">Mot de passe :</label>
+                    <input 
+                        type="password" 
+                        id="password" 
+                        name="password" 
+                        placeholder="Entrez le mot de passe"
+                        autofocus
+                        required
+                    >
+                </div>
+                <button type="submit" class="btn-login">Se connecter</button>
+                <div id="error-message" class="error-message" style="display: none;"></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Header de navigation pour le mode plein écran -->
+    <div id="plein-ecran-header" class="plein-ecran-header" style="display: none;">
+        <button class="btn btn-ghost btn-accueil" onclick="afficherAccueil()">🏠 Accueil</button>
+        <h2 id="titre-plein-ecran"></h2>
+        <div class="header-buttons">
+            <button class="btn btn-ghost btn-focus" id="btn-focus" onclick="basculerModeFocus()" style="display: none;" title="Mode focus">🎯 Focus</button>
+            <button class="btn btn-ghost btn-deconnexion" onclick="seDeconnecter()">🚪 Déconnexion</button>
+        </div>
+    </div>
+
+    <!-- Container principal -->
+    <div class="container" id="container-principal" style="display: none;">
+        <header class="app-header">
+            <div class="app-brand">
+                <img src="/logo.png" alt="Logo" class="app-logo">
+                <div class="app-titles">
+                    <h1 class="app-title">Gestionnaire Salle</h1>
+                    <p class="app-subtitle">Accès rapide aux outils</p>
+                </div>
+            </div>
+            <div class="app-actions">
+                <button class="btn btn-ghost btn-deconnexion" onclick="seDeconnecter()">🚪 Déconnexion</button>
+            </div>
+        </header>
+        
+        <section class="dashboard">
+        <div class="boutons-container" aria-label="Outils">
+            <button class="bouton meteo" onclick="afficherMeteo()">
+                <div class="icone">🌤️</div>
+                <div class="tile-text">
+                    <div class="tile-title">Météo</div>
+                    <div class="tile-subtitle">Paris</div>
+                </div>
+            </button>
+            <button class="bouton pronote" onclick="afficherPronote()">
+                <div class="icone">📅</div>
+                <div class="tile-text">
+                    <div class="tile-title">Emploi du temps</div>
+                    <div class="tile-subtitle">Pronote</div>
+                </div>
+            </button>
+            <button class="bouton fichiers" onclick="afficherFichiers()">
+                <div class="icone">📁</div>
+                <div class="tile-text">
+                    <div class="tile-title">Fichiers</div>
+                    <div class="tile-subtitle">Locaux</div>
+                </div>
+            </button>
+            <button class="bouton horloge" onclick="afficherHorloge()">
+                <div class="icone">🕐</div>
+                <div class="tile-text">
+                    <div class="tile-title" id="heure-affichage">Horloge</div>
+                    <div class="tile-subtitle">Heure actuelle</div>
+                </div>
+            </button>
+            <button class="bouton camera" onclick="afficherCamera()">
+                <div class="icone">📷</div>
+                <div class="tile-text">
+                    <div class="tile-title">Caméra</div>
+                    <div class="tile-subtitle">Aperçu / capture</div>
+                </div>
+            </button>
+        </div>
+
+        <div id="contenu" class="contenu"></div>
+        </section>
+    </div>
+
+    <!-- Container plein écran -->
+    <div id="container-plein-ecran" class="container-plein-ecran" style="display: none;">
+        <div id="contenu-plein-ecran" class="contenu-plein-ecran"></div>
+    </div>
+
+    <script src="auth.js"></script>
+    <script src="script.js"></script>
+    <script src="meteo.js"></script>
+    <script src="pronote.js"></script>
+    <script src="fichiers.js"></script>
+    <script src="horloge.js"></script>
+    <script src="camera.js"></script>
+</body>
+</html>
