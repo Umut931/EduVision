@@ -1,58 +1,27 @@
-// Nouvelle version : afficher la liste des fichiers du dossier, permettre la sélection et l'envoi au backend
 function afficherFichiers() {
-    fetch('/api/fichiers')
-        .then(res => res.json())
-        .then(data => {
-            if (!data.success) throw new Error('Erreur lors de la récupération des fichiers');
-            const fichiers = data.fichiers;
-            const contenu = document.getElementById('contenu');
-            let html = `<h2>📁 Fichiers disponibles</h2>`;
-            if (fichiers.length === 0) {
-                html += `<p>Aucun fichier trouvé dans le dossier.</p>`;
-            } else {
-                html += `<form id="form-selection-fichiers"><ul style="list-style:none;padding:0;">`;
-                fichiers.forEach(f => {
-                    html += `<li style="margin-bottom:8px;">
-                        <label>
-                            <input type="checkbox" name="fichier" value="${f.nom}">
-                            ${f.nom} <span style='color:#888;font-size:0.9em;'>(${f.type}, ${Math.round(f.taille/1024)} Ko)</span>
-                            <a href="${f.chemin}" target="_blank" style="margin-left:10px;">🔗 Ouvrir</a>
-                        </label>
-                    </li>`;
-                });
-                html += `</ul>
-                <button type="submit" class="btn-camera" style="margin-top:10px;">Mettre à jour la sélection</button>
-                </form>`;
-            }
-            contenu.innerHTML = html;
-            const form = document.getElementById('form-selection-fichiers');
-            if (form) {
-                form.onsubmit = function(e) {
-                    e.preventDefault();
-                    const selection = Array.from(form.elements['fichier'])
-                        .filter(input => input.checked)
-                        .map(input => input.value);
-                    fetch('/api/selection', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ fichiers: selection })
-                    })
-                    .then(res => res.json())
-                    .then(resp => {
-                        if (resp.success) {
-                            alert('Sélection mise à jour !');
-                        } else {
-                            alert('Erreur lors de la mise à jour de la sélection');
-                        }
-                    })
-                    .catch(() => alert('Erreur lors de la mise à jour de la sélection'));
-                };
-            }
-        })
-        .catch(() => {
-            const contenu = document.getElementById('contenu');
-            contenu.innerHTML = '<p style="color:red;">Erreur lors de la récupération des fichiers.</p>';
-        });
+    // Créer un input file caché et le déclencher
+    const input = document.createElement('input');
+    input.type = 'file';
+    // Accepter tous les types de fichiers (vidéos, documents, images, etc.)
+    input.accept = 'video/*,image/*,application/pdf,.doc,.docx,.txt,.odt,.xls,.xlsx,.ppt,.pptx';
+    input.style.display = 'none';
+    
+    input.onchange = function(event) {
+        const file = event.target.files[0];
+        if (file) {
+            afficherFichierPleinEcran(file);
+        }
+    };
+    
+    // Déclencher le clic sur l'input file pour ouvrir l'explorateur
+    document.body.appendChild(input);
+    input.click();
+    // Ne pas supprimer immédiatement pour éviter les problèmes avec certains navigateurs
+    setTimeout(() => {
+        if (input.parentNode) {
+            document.body.removeChild(input);
+        }
+    }, 100);
 }
 
 // Variable pour stocker l'URL de l'objet actuel
