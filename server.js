@@ -359,6 +359,44 @@ app.get('/api/fichiers/lecture/:nomFichier', async (req, res) => {
     }
 });
 
+// Stockage temporaire de la sélection (en mémoire)
+let selectionMedias = [];
+
+// Endpoint pour mettre à jour la sélection de médias
+app.post('/api/selection', (req, res) => {
+    const { fichiers } = req.body;
+    if (!Array.isArray(fichiers)) {
+        return res.status(400).json({ success: false, message: 'Format attendu: { fichiers: [ ... ] }' });
+    }
+    selectionMedias = fichiers;
+    logEvent('INFO', 'Sélection de médias mise à jour', { selection: selectionMedias });
+    res.json({ success: true, selection: selectionMedias });
+});
+
+// Endpoint pour obtenir la sélection courante (pour EduVision-Beta)
+app.get('/api/medias', async (req, res) => {
+    try {
+        const dossierFichiers = process.env.DOSSIER_FICHIERS || path.join(__dirname, 'fichiers');
+        const fichiersInfos = [];
+        for (const nom of selectionMedias) {
+            const cheminComplet = path.join(dossierFichiers, nom);
+            if (await fs.pathExists(cheminComplet)) {
+                const stats = await fs.stat(cheminComplet);
+                fichiersInfos.push({
+                    nom,
+                    taille: stats.size,
+                    dateModification: stats.mtime,
+                    url: `/api/fichiers/lecture/${encodeURIComponent(nom)}`
+                });
+            }
+        }
+        res.json({ success: true, medias: fichiersInfos });
+    } catch (error) {
+        logEvent('ERROR', 'Erreur récupération sélection', { message: error.message });
+        res.status(500).json({ success: false, message: 'Erreur lors de la récupération de la sélection' });
+    }
+});
+
 // Démarrer le serveur
 app.listen(PORT, () => {
     logEvent('SUCCESS', `Serveur démarré sur http://localhost:${PORT}`);

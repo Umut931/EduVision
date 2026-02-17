@@ -3,6 +3,8 @@ let cameraStream = null;
 let cameraActive = false;
 let photosCapturees = [];
 
+
+
 function afficherCamera() {
     // Si la page contient container-plein-ecran (index) : mode normal, sinon (camera-page.html) : mode direct
     const contenu = document.getElementById('contenu-plein-ecran');
@@ -16,10 +18,16 @@ function afficherCamera() {
                 <button class="btn-camera" id="btn-flip" onclick="basculerCamera()" style="display: none;">🔄 Basculer</button>
                 <button class="btn-camera" id="btn-fullscreen" onclick="basculerPleinEcranCamera()">⛶ Plein écran</button>
                 <button class="btn-camera" id="btn-gallery" onclick="afficherGalerie()" style="display: none;">🖼️ Galerie (<span id="count-photos">0</span>)</button>
+                <button class="btn-camera" id="btn-eteindre" onclick="fermerCameraPage()">⏹️ Éteindre</button>
             </div>
         </div>
     `;
     demarrerCamera();
+}
+
+function fermerCameraPage() {
+    // Ferme la fenêtre si possible (fonctionne si ouverte via window.open)
+    window.close();
 }
 
 function demarrerCamera() {
@@ -164,9 +172,7 @@ function basculerPleinEcranCamera() {
     const btn = document.getElementById('btn-fullscreen');
     
     if (!video) return;
-    
     cameraFullscreen = !cameraFullscreen;
-    
     if (cameraFullscreen) {
         // Entrer en plein écran - cacher l'en-tête
         video.classList.add('camera-fullscreen');
@@ -183,6 +189,8 @@ function basculerPleinEcranCamera() {
         btn.style.background = '';
     }
 }
+
+
 
 // Galerie de photos
 function afficherGalerie() {

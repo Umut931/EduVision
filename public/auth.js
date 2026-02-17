@@ -1,3 +1,4 @@
+// Face ID removed — fonction supprimée
 // ===================== SYSTÈME D'AUTHENTIFICATION =====================
 
 // CONFIGURE LE MOT DE PASSE ICI (à personnaliser)
