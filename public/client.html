@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>EduVision Screen</title>
+    <style>
+        body{
+            margin:0;
+            background:black;
+            color:white;
+            font-family:sans-serif;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            height:100vh;
+            overflow: hidden;
+        }
+        #media-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        video, img, iframe {
+            max-width: 100%;
+            max-height: 100%;
+            object-fit: contain;
+        }
+        #no-media {
+            text-align: center;
+            color: #666;
+        }
+        #status {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            font-size: 0.8em;
+            color: #999;
+            background: rgba(0,0,0,0.8);
+            padding: 5px 10px;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <div id="media-container">
+        <div id="no-media">Chargement...</div>
+    </div>
+    <div id="status">Chargement...</div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const pathParts = window.location.pathname.split('/');
+        const screenId = pathParts[pathParts.length - 1] || 'unknown';
+        const baseUrl = window.location.protocol + '//' + window.location.host;
+        document.title = 'EduVision Screen ' + screenId;
+
+        let currentIndex = 0;
+        let medias = [];
+        let mediaInterval;
+        let horlogeInterval;
+        let currentDisplayPage = 'documents';
+        let socket = null;
+
+        function stopMediaRotation() {
+            if (mediaInterval) {
+                clearTimeout(mediaInterval);
+                mediaInterval = null;
+            }
+        }
+
+        function renderDisplayPage(page) {
+            currentDisplayPage = page || 'documents';
+            const status = document.getElementById('status');
+            if (status) {
+                status.textContent = 'ID: ' + screenId + ' | page: ' + currentDisplayPage;
+            }
+            if (horlogeInterval) {
+                clearInterval(horlogeInterval);
+                horlogeInterval = null;
+            }
+
+            if (currentDisplayPage === 'meteo') {
+                stopMediaRotation();
+                renderMeteoPage();
+                return;
+            }
+
+            if (currentDisplayPage === 'pronote') {
+                stopMediaRotation();
+                renderPronotePage();
+                return;
+            }
+
+            if (currentDisplayPage === 'horloge') {
+                stopMediaRotation();
+                renderHorlogePage();
+                return;
+            }
+
+            if (currentDisplayPage === 'camera') {
+                stopMediaRotation();
+                renderCameraPage();
+                return;
+            }
+
+            if (medias.length === 0) {
+                document.getElementById('media-container').innerHTML = '<div id="no-media">Aucun média sélectionné</div>';
+                return;
+            }
+
+            currentIndex = Math.min(currentIndex, medias.length - 1);
+            afficherMedia(currentIndex);
+            scheduleNextMedia();
+        }
+
+        function renderMeteoPage() {
+            const container = document.getElementById('media-container');
+            container.innerHTML = '<div style="color: white; text-align:center; width:100%; padding: 20px;">Chargement de la météo...</div>';
+            fetch('/api/meteo')
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.success) {
+                        container.innerHTML = '<div style="color:white; text-align:center; padding:20px;">Erreur météo : ' + (data.message || 'Données non disponibles') + '</div>';
+                        return;
+                    }
+                    const d = data.data || {};
+                    container.innerHTML = '<div style="padding: 20px; color: white; text-align: center;">' +
+                        '<div style="font-size: 3em; margin-bottom: 10px;">🌤️ ' + (d.ville || 'Paris') + '</div>' +
+                        '<div style="font-size: 4em; font-weight: 700;">' + d.temperature + '°C</div>' +
+                        '<div style="margin-top: 12px; font-size: 1.2em;">' + (d.description || '') + '</div>' +
+                        '<div style="display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; margin-top: 20px;">' +
+                        '<div>💧 Humidité : ' + d.humidite + '%</div>' +
+                        '<div>🌬️ Vent : ' + d.vent + ' m/s</div>' +
+                        '<div>📍 ' + (d.ville || 'Paris') + '</div>' +
+                        '</div>' +
+                        '</div>';
+                })
+                .catch(err => {
+                    container.innerHTML = '<div style="color:white; text-align:center; padding:20px;">Erreur météo : ' + err.message + '</div>';
+                });
+        }
+
+        function renderPronotePage() {
+            const container = document.getElementById('media-container');
+            container.innerHTML = '<div style="color: white; text-align:center; width:100%; padding: 20px;">Chargement de l\'emploi du temps...</div>';
+            fetch('/api/pronote')
+                .then(res => res.json())
+                .then(data => {
+                    if (!data.success) {
+                        container.innerHTML = '<div style="color:white; text-align:center; padding:20px;">Erreur Pronote : ' + (data.message || 'Données non disponibles') + '</div>';
+                        return;
+                    }
+                    const edt = data.data || {};
+                    const cours = Array.isArray(edt.cours) ? edt.cours : [];
+                    if (cours.length === 0) {
+                        container.innerHTML = '<div style="padding: 20px; color:white; text-align:center;"><h2>' + (edt.jour || '') + ' ' + (edt.date || '') + '</h2><p>Aucun cours trouvé.</p></div>';
+                        return;
+                    }
+
+                    let html = '<div style="padding: 20px; color: white;">' +
+                        '<h2 style="text-align:center; margin-bottom: 20px;">📅 ' + (edt.jour || '') + ' ' + (edt.date || '') + '</h2>' +
+                        '<div style="display: grid; gap: 16px; max-width: 1000px; margin: 0 auto;">';
+
+                    cours.forEach(c => {
+                        html += '<div style="border: 1px solid rgba(255,255,255,0.2); padding: 16px; border-radius: 12px; background: rgba(0,0,0,0.35);">' +
+                            '<div style="font-size: 1.3em; font-weight: 700; margin-bottom: 8px;">' + (c.matiere || c.summary || 'Cours') + '</div>' +
+                            '<div style="display:flex; flex-wrap: wrap; gap: 12px; font-size: 0.95em;">' +
+                            '<span>🕐 ' + (c.heure || c.time || '—') + '</span>' +
+                            '<span>📍 ' + (c.salle || c.location || '—') + '</span>' +
+                            '<span>👨‍🏫 ' + (c.professeur || c.teacher || '—') + '</span>' +
+                            '</div>' +
+                            '</div>';
+                    });
+
+                    html += '</div></div>';
+                    container.innerHTML = html;
+                })
+                .catch(err => {
+                    container.innerHTML = '<div style="color:white; text-align:center; padding:20px;">Erreur Pronote : ' + err.message + '</div>';
+                });
+        }
+
+        function renderHorlogePage() {
+            const container = document.getElementById('media-container');
+            container.innerHTML = '<div style="color: white; display: flex; align-items: center; justify-content: center; height: 100%; width: 100%;"><div style="text-align: center;"><div id="raspi-clock" style="font-size: 8vw; font-weight: 700; line-height: 1;">--:--:--</div><div id="raspi-clock-date" style="margin-top: 16px; font-size: 2vw; opacity: 0.8;"></div></div></div>';
+            if (horlogeInterval) {
+                clearInterval(horlogeInterval);
+                horlogeInterval = null;
+            }
+            updateClock();
+            horlogeInterval = setInterval(updateClock, 1000);
+        }
+
+        function updateClock() {
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            const seconds = String(now.getSeconds()).padStart(2, '0');
+            const clock = document.getElementById('raspi-clock');
+            const date = document.getElementById('raspi-clock-date');
+            if (clock) clock.textContent = hours + ':' + minutes + ':' + seconds;
+            if (date) date.textContent = now.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+        }
+
+        function renderCameraPage() {
+            document.getElementById('media-container').innerHTML = '<iframe src="/camera-page.html" style="width:100%; height:100%; border:none;"></iframe>';
+        }
+
+        function afficherMedia(index) {
+            const container = document.getElementById('media-container');
+            if (medias.length === 0) {
+                container.innerHTML = '<div id="no-media">Aucun média sélectionné</div>';
+                return;
+            }
+            const media = medias[index];
+            let html = '';
+            if (media.nom.match(/\.(mp4|avi|mov|mkv|webm|flv|wmv)$/i)) {
+                html = '<video autoplay muted loop style="width: 100%; height: 100%; object-fit: contain;"><source src="' + media.url + '" type="video/mp4"></video>';
+            } else if (media.nom.match(/\.(jpg|jpeg|png|gif|webp)$/i)) {
+                html = '<img src="' + media.url + '" style="width: 100%; height: 100%; object-fit: contain;">';
+            } else if (media.nom.match(/\.pdf$/i)) {
+                html = '<iframe src="' + media.url + '" style="width: 100%; height: 100%; border: none;"></iframe>';
+            } else {
+                html = '<div style="text-align: center; padding: 20px;">Fichier non supporté: ' + media.nom + '</div>';
+            }
+            container.innerHTML = html;
+        }
+
+        function scheduleNextMedia() {
+            if (mediaInterval) {
+                clearTimeout(mediaInterval);
+                mediaInterval = null;
+            }
+            if (medias.length < 2) return;
+            const current = medias[currentIndex];
+            const delay = (current && Number(current.duration) > 0 ? Number(current.duration) : 10) * 1000;
+            mediaInterval = setTimeout(() => {
+                currentIndex = (currentIndex + 1) % medias.length;
+                afficherMedia(currentIndex);
+                scheduleNextMedia();
+            }, delay);
+        }
+
+        function traiterMedias(data) {
+            medias = data.medias || [];
+            if (medias.length > 0) {
+                currentIndex = 0;
+                afficherMedia(currentIndex);
+                scheduleNextMedia();
+            } else {
+                document.getElementById('media-container').innerHTML = '<div id="no-media">Aucun média sélectionné</div>';
+                if (mediaInterval) {
+                    clearTimeout(mediaInterval);
+                    mediaInterval = null;
+                }
+            }
+        }
+
+        socket = io();
+
+        socket.on('connect', () => {
+            console.log('Connecté au serveur WebSocket');
+            socket.emit('register-display-client', { screenId });
+        });
+
+        socket.on('medias-list', (data) => {
+            if (currentDisplayPage === 'documents') {
+                traiterMedias(data);
+            }
+        });
+
+        socket.on('display-page-changed', (data) => {
+            if (data && data.page) {
+                renderDisplayPage(data.page);
+            }
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Déconnecté du serveur WebSocket');
+            document.getElementById('media-container').innerHTML = '<div id="no-media">Connexion perdue...</div>';
+        });
+
+        console.log('Client ' + screenId + ' connecté sur ' + baseUrl);
+    </script>
+</body>
+</html>

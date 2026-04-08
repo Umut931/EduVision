@@ -1,0 +1,60 @@
+# Configuration du client EduVision
+# Ce fichier contient tous les paramètres du client
+# Modifiez ces valeurs selon votre installation
+
+# ===========================================
+# CONFIGURATION RÉSEAU
+# ===========================================
+
+# Adresse IP du serveur EduVision
+# Remplacez par l'IP réelle de votre serveur
+SERVER_IP=192.168.1.100
+
+# Port du serveur EduVision (défaut: 3000)
+SERVER_PORT=3000
+
+# ===========================================
+# CONFIGURATION ÉCRAN
+# ===========================================
+
+# ID unique de cet écran
+# Chaque écran doit avoir un ID différent (screen1, screen2, screen3, etc.)
+SCREEN_ID=screen1
+
+# ===========================================
+# CONFIGURATION NAVIGATEUR
+# ===========================================
+
+# Options supplémentaires pour Chromium
+# --disable-web-security : Désactive la sécurité web (pour développement)
+# --user-agent : Identifiant du client
+CHROMIUM_EXTRA_OPTS="--disable-web-security --user-agent='EduVision-Client/1.0'"
+
+# ===========================================
+# CONFIGURATION AVANCÉE
+# ===========================================
+
+# Délai avant redémarrage automatique en cas de crash (secondes)
+RESTART_DELAY=5
+
+# Timeout pour les requêtes réseau (secondes)
+NETWORK_TIMEOUT=30
+
+# Activer les logs détaillés (true/false)
+VERBOSE_LOGGING=false
+
+# ===========================================
+# EXEMPLES DE CONFIGURATION
+# ===========================================
+
+# Pour plusieurs écrans dans la même salle:
+# SCREEN_ID=screen1
+# SCREEN_ID=screen2
+# SCREEN_ID=screen3
+
+# Pour un réseau différent:
+# SERVER_IP=10.0.0.100
+# SERVER_PORT=8080
+
+# Pour un environnement de développement:
+# CHROMIUM_EXTRA_OPTS="--disable-web-security --disable-features=VizDisplayCompositor"

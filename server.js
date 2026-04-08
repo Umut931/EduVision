@@ -1,0 +1,994 @@
+const express = require('express');
+const axios = require('axios');
+const path = require('path');
+const fs = require('fs-extra');
+const cors = require('cors');
+const ical = require('ical');
+const https = require('https');
+const { spawn } = require('child_process');
+const multer = require('multer');
+const http = require('http');
+const socketIo = require('socket.io');
+const sensorsModule = require('./services/sensors');
+
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+    cors: { origin: '*', methods: ['GET', 'POST'] }
+});
+const PORT = 3000;
+
+const publicDir = path.join(__dirname, 'public');
+const hlsDir = path.join(publicDir, 'hls');
+
+fs.ensureDirSync(hlsDir);
+
+// Mode d'affichage pour les clients : 'documents' ou 'camera'
+let currentDisplayMode = 'documents';
+// Page à afficher sur les clients Raspberry : 'documents', 'camera', 'meteo', 'pronote', 'horloge'
+let currentDisplayPage = 'documents';
+
+let ffmpegProcess = null;
+
+function nettoyerHls() {
+    try {
+        const fichiers = fs.readdirSync(hlsDir);
+        fichiers.forEach((fichier) => {
+            const chemin = path.join(hlsDir, fichier);
+            try {
+                fs.unlinkSync(chemin);
+            } catch (err) {
+                logEvent('WARNING', 'Impossible de supprimer un fichier HLS', { fichier, erreur: err.message });
+            }
+        });
+    } catch (err) {
+        logEvent('WARNING', 'Impossible de lire le dossier HLS', { erreur: err.message });
+    }
+}
+
+function demarrerFluxCamera() {
+    if (ffmpegProcess) {
+        logEvent('INFO', 'Flux caméra déjà actif');
+        return;
+    }
+
+    const rtspUrl = 'rtsp://EduVision:Bergson75019@192.168.0.103:554/stream1';
+
+    logEvent('INFO', 'Démarrage du flux caméra', { rtspUrlMasque: 'rtsp://***:***@192.168.0.103:554/stream1' });
+
+    ffmpegProcess = spawn('ffmpeg', [
+        '-rtsp_transport', 'tcp',
+        '-i', rtspUrl,
+        '-reconnect', '1',
+        '-reconnect_at_eof', '1',
+        '-reconnect_streamed', '1',
+        '-f', 'mjpeg',
+        '-q:v', '2',
+        '-r', '15',
+        'pipe:1'
+    ]);
+
+    let mjpegBuffer = Buffer.alloc(0);
+
+    ffmpegProcess.stdout.on('data', (data) => {
+        mjpegBuffer = Buffer.concat([mjpegBuffer, data]);
+        let start = 0;
+        while (true) {
+            const soiIndex = mjpegBuffer.indexOf(Buffer.from([0xFF, 0xD8]), start);
+            if (soiIndex === -1) break;
+            const eoiIndex = mjpegBuffer.indexOf(Buffer.from([0xFF, 0xD9]), soiIndex + 2);
+            if (eoiIndex === -1) break;
+            const jpegFrame = mjpegBuffer.slice(soiIndex, eoiIndex + 2);
+            io.emit('camera-frame', jpegFrame.toString('base64'));
+            start = eoiIndex + 2;
+        }
+        mjpegBuffer = mjpegBuffer.slice(start);
+    });
+
+    ffmpegProcess.stderr.on('data', (data) => {
+        logEvent('INFO', 'FFmpeg', data.toString());
+    });
+
+    ffmpegProcess.on('error', (err) => {
+        logEvent('ERROR', 'Erreur lancement FFmpeg', { message: err.message });
+        ffmpegProcess = null;
+    });
+
+    ffmpegProcess.on('close', (code) => {
+        logEvent('WARNING', 'FFmpeg arrêté', { code });
+        ffmpegProcess = null;
+    });
+}
+
+function attendreFichierHls(timeoutMs = 5000) {
+    const fichier = path.join(hlsDir, 'stream.m3u8');
+    const intervalMs = 200;
+    let elapsed = 0;
+
+    return new Promise((resolve, reject) => {
+        const interval = setInterval(() => {
+            if (fs.existsSync(fichier)) {
+                clearInterval(interval);
+                resolve(true);
+                return;
+            }
+
+            elapsed += intervalMs;
+            if (elapsed >= timeoutMs) {
+                clearInterval(interval);
+                reject(new Error('Fichier HLS non créé dans le délai imparti'));
+            }
+        }, intervalMs);
+    });
+}
+
+// ===================== SYSTÈME DE LOGS =====================
+const logsDir = path.join(__dirname, 'logs');
+
+// Créer le dossier logs s'il n'existe pas
+fs.ensureDirSync(logsDir);
+
+// Fonction pour logger les événements
+function logEvent(level, message, details = '') {
+    const timestamp = new Date().toLocaleString('fr-FR');
+    const logMessage = `[${timestamp}] [${level}] ${message}${details ? ' - ' + JSON.stringify(details) : ''}\n`;
+    
+    // Log dans la console
+    const colors = {
+        'INFO': '\x1b[36m',    // Cyan
+        'ERROR': '\x1b[31m',   // Rouge
+        'WARNING': '\x1b[33m', // Jaune
+        'SUCCESS': '\x1b[32m'  // Vert
+    };
+    const reset = '\x1b[0m';
+    console.log(`${colors[level] || ''}${logMessage}${reset}`);
+    
+    // Log dans le fichier
+    const logFile = path.join(logsDir, `${new Date().toISOString().split('T')[0]}.log`);
+    fs.appendFileSync(logFile, logMessage);
+}
+
+// Middleware pour logger les requêtes
+app.use((req, res, next) => {
+    logEvent('INFO', `Requête ${req.method}`, { url: req.path, ip: req.ip });
+    next();
+});
+
+// ===================== FIN SYSTÈME DE LOGS =====================
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.static(publicDir));
+app.use('/hls', express.static(hlsDir));
+
+// Configuration multer pour l'upload de fichiers
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        const dossierFichiers = process.env.DOSSIER_FICHIERS || path.join(__dirname, 'fichiers');
+        fs.ensureDirSync(dossierFichiers);
+        cb(null, dossierFichiers);
+    },
+    filename: function (req, file, cb) {
+        // Garder le nom original du fichier
+        cb(null, file.originalname);
+    }
+});
+const upload = multer({ storage: storage });
+
+// ===================== INITIALISATION DES CAPTEURS =====================
+let sensorInterval = null;
+let sensorClients = new Set();
+
+// Initialiser les capteurs au démarrage
+sensorsModule.initializeSensors().catch(err => {
+    logEvent('WARNING', 'Initialisation des capteurs échouée', { message: err.message });
+});
+
+// Ensemble pour tracker les clients Raspberry (display clients)
+let displayClients = new Set();
+
+// Fonction pour construire et envoyer la liste des médias
+async function broadcastMediasList() {
+    try {
+        const dossierFichiers = process.env.DOSSIER_FICHIERS || path.join(__dirname, 'fichiers');
+        const fichiersInfos = [];
+        
+        for (const nom of selectionMedias) {
+            if (nom === 'camera') {
+                if (currentDisplayMode === 'camera') {
+                    fichiersInfos.push({
+                        nom: 'camera',
+                        type: 'camera',
+                        duration: selectionMediasDuration[nom] || 30,
+                        url: '/camera-page.html'
+                    });
+                }
+            } else {
+                if (currentDisplayMode === 'documents') {
+                    const cheminComplet = path.join(dossierFichiers, nom);
+                    if (await fs.pathExists(cheminComplet)) {
+                        const stats = await fs.stat(cheminComplet);
+                        fichiersInfos.push({
+                            nom,
+                            taille: stats.size,
+                            dateModification: stats.mtime,
+                            duration: selectionMediasDuration[nom] || 10,
+                            url: `/api/fichiers/lecture/${encodeURIComponent(nom)}`
+                        });
+                    }
+                }
+            }
+        }
+        
+        // Émettre aux clients Raspberry uniquement
+        displayClients.forEach(clientId => {
+            io.to(clientId).emit('medias-list', {
+                success: true,
+                medias: fichiersInfos,
+                timestamp: new Date().toISOString()
+            });
+        });
+    } catch (error) {
+        logEvent('ERROR', 'Erreur broadcast médias', { message: error.message });
+    }
+}
+
+function broadcastDisplayPage() {
+    displayClients.forEach(clientId => {
+        io.to(clientId).emit('display-page-changed', {
+            page: currentDisplayPage,
+            timestamp: new Date().toISOString()
+        });
+    });
+}
+
+function setDisplayPage(page) {
+    const pagesValides = ['documents', 'camera', 'meteo', 'pronote', 'horloge'];
+    if (!pagesValides.includes(page)) return false;
+
+    currentDisplayPage = page;
+    if (page === 'documents' || page === 'camera') {
+        currentDisplayMode = page;
+    }
+
+    logEvent('INFO', 'Page d\'affichage changée', { page: currentDisplayPage, mode: currentDisplayMode });
+    broadcastDisplayPage();
+
+    if (currentDisplayPage === 'documents' || currentDisplayPage === 'camera') {
+        broadcastMediasList();
+    }
+
+    return true;
+}
+
+// Configuration des événements Socket.IO
+io.on('connection', (socket) => {
+    logEvent('INFO', 'Client Socket.IO connecté', { id: socket.id });
+    sensorClients.add(socket.id);
+
+    // Envoyer les données actuelles au nouveau client
+    const currentState = sensorsModule.getCurrentState();
+    socket.emit('sensor_data', currentState);
+    
+    // Listener pour les clients Raspberry (display clients)
+    socket.on('register-display-client', (data) => {
+        displayClients.add(socket.id);
+        logEvent('INFO', 'Client Raspberry enregistré', { id: socket.id, screenId: data?.screenId });
+        // Envoyer immédiatement le mode courant et la page actuelle
+        socket.emit('display-page-changed', { page: currentDisplayPage, timestamp: new Date().toISOString() });
+        if (currentDisplayPage === 'documents' || currentDisplayPage === 'camera') {
+            broadcastMediasList();
+        }
+    });
+
+    socket.on('change-display-page', (data) => {
+        const page = data && data.page ? String(data.page) : null;
+        if (page && setDisplayPage(page)) {
+            socket.emit('display-page-changed', { page: currentDisplayPage, timestamp: new Date().toISOString() });
+        } else {
+            socket.emit('error', { message: 'Page d\'affichage invalide' });
+        }
+    });
+
+    // Listener pour les déconnexions
+    socket.on('disconnect', () => {
+        logEvent('INFO', 'Client Socket.IO déconnecté', { id: socket.id });
+        sensorClients.delete(socket.id);
+        displayClients.delete(socket.id);
+        
+        // Arrêter l'interval si aucun client n'est connecté
+        if (sensorClients.size === 0 && sensorInterval) {
+            clearInterval(sensorInterval);
+            sensorInterval = null;
+            logEvent('INFO', 'Arrêt de l\'envoi des données capteurs (aucun client)');
+        }
+    });
+});
+
+// Fonction pour diffuser les données des capteurs
+async function broadcastSensorData() {
+    try {
+        const sensorData = await sensorsModule.readAllSensors();
+        io.emit('sensor_data', sensorData);
+    } catch (err) {
+        logEvent('WARNING', 'Erreur lors de la lecture des capteurs', { message: err.message });
+    }
+}
+
+// ===================== FIN INITIALISATION DES CAPTEURS =====================
+
+// Route principale - sert index.html
+app.get('/', (req, res) => {
+    logEvent('INFO', 'Accès à la page principale');
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// Route pour la météo de Paris
+app.get('/api/meteo', async (req, res) => {
+    try {
+        logEvent('INFO', 'Appel API météo');
+        // Utilisation de l'API OpenWeatherMap (gratuite)
+        // Remplacez 'VOTRE_CLE_API' par votre clé API OpenWeatherMap
+        // Vous pouvez obtenir une clé gratuite sur https://openweathermap.org/api
+        const API_KEY = process.env.OPENWEATHER_API_KEY || 'demo_key';
+        const url = `https://api.openweathermap.org/data/2.5/weather?q=Paris,fr&appid=${API_KEY}&units=metric&lang=fr`;
+        
+        const response = await axios.get(url);
+        logEvent('SUCCESS', 'Données météo récupérées avec succès', { ville: response.data.name });
+        res.json({
+            success: true,
+            data: {
+                ville: response.data.name,
+                temperature: response.data.main.temp,
+                description: response.data.weather[0].description,
+                humidite: response.data.main.humidity,
+                vent: response.data.wind?.speed || 0,
+                icone: response.data.weather[0].icon
+            }
+        });
+    } catch (error) {
+        logEvent('ERROR', 'Erreur météo', { message: error.message, code: error.code });
+        // Données de démonstration si l'API n'est pas disponible
+        res.json({
+            success: false,
+            data: {
+                ville: 'Paris',
+                temperature: 'N/A',
+                description: 'Données non disponibles. Configurez votre clé API OpenWeatherMap.',
+                humidite: 'N/A',
+                vent: 'N/A',
+                icone: '01d'
+            },
+            message: 'Utilisez une clé API OpenWeatherMap pour les vraies données'
+        });
+    }
+});
+
+// Route pour le client
+app.get('/client/:id', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'client.html'));
+});
+
+// Route camera
+app.get('/start-camera', (req, res) => {
+    try {
+        demarrerFluxCamera();
+        res.json({ ok: true });
+    } catch (err) {
+        logEvent('ERROR', 'Impossible de démarrer le flux caméra', { message: err.message });
+        res.status(500).json({
+            ok: false,
+            error: 'Le serveur n’a pas pu démarrer le flux caméra'
+        });
+    }
+});
+
+// Route pour l'emploi du temps Pronote
+app.get('/api/pronote', async (req, res) => {
+    try {
+        logEvent('INFO', 'Appel API Pronote');
+        
+        // Charger depuis le fichier local mesinformations.ics
+        const icalPath = path.join(__dirname, 'mesinformations.ics');
+        let icalContent;
+        
+        if (await fs.pathExists(icalPath)) {
+            icalContent = await fs.readFile(icalPath, 'utf-8');
+            logEvent('SUCCESS', 'Flux iCal Pronote chargé depuis le fichier local');
+        } else {
+            // Fallback sur l'URL distant si le fichier n'existe pas
+            const icalUrl = process.env.PRONOTE_ICAL_URL || 'https://0750711r.index-education.net/pronote/ical/mesinformations.ics?icalsecurise=2B3753E050B35B169E18C7624BB7DA25F623F2DFE26654D9AC4F54FE775E35858B3C20E8ABB0FFD0D9AB7F9C6FF1CC70&version=2025.2.8&param=900A75DF9ED8C62E212781A9E4DCC937';
+
+            // Récupération du fichier iCal distant
+            // Attention : on désactive ici la vérification du certificat TLS car
+            // le certificat du serveur Pronote est expiré.
+            // C'est pratique pour un projet perso, mais à NE PAS faire en prod.
+            const httpsAgent = new https.Agent({
+                rejectUnauthorized: false
+            });
+
+            const icalResponse = await axios.get(icalUrl, {
+                responseType: 'text',
+                httpsAgent
+            });
+
+            icalContent = icalResponse.data;
+            logEvent('SUCCESS', 'Flux iCal Pronote récupéré depuis l\'URL distant');
+        }
+
+        // Parsing du contenu iCal
+        const events = ical.parseICS(icalContent);
+
+        // Fonction utilitaire : comparer deux dates au jour près
+        const estMemeJour = (d1, d2) => (
+            d1.getFullYear() === d2.getFullYear() &&
+            d1.getMonth() === d2.getMonth() &&
+            d1.getDate() === d2.getDate()
+        );
+
+        const formatterHeure = (date) =>
+            date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+
+        const maintenant = new Date();
+        let dateSelectionnee = maintenant;
+        let cours = [];
+        let decalageJour = 0;
+
+        // On cherche d'abord les cours d'aujourd'hui.
+        // Si on ne trouve rien, on regarde les jours suivants (jusqu'à 7 jours).
+        for (let offset = 0; offset < 7 && cours.length === 0; offset++) {
+            const jourCible = new Date(maintenant);
+            jourCible.setDate(jourCible.getDate() + offset);
+
+            const coursPourJour = [];
+
+            for (const key in events) {
+                const ev = events[key];
+                if (!ev || ev.type !== 'VEVENT' || !ev.start || !ev.end) continue;
+
+                if (!estMemeJour(ev.start, jourCible)) continue;
+
+                // Convertir les champs en chaînes de caractères
+                const getSummary = () => {
+                    if (typeof ev.summary === 'string') return ev.summary;
+                    if (ev.summary && ev.summary.value) return ev.summary.value;
+                    if (ev.summary && typeof ev.summary === 'object') {
+                        return JSON.stringify(ev.summary);
+                    }
+                    if (ev.summary) return String(ev.summary);
+                    return 'Cours';
+                };
+                const getLocation = () => {
+                    if (typeof ev.location === 'string') return ev.location;
+                    if (ev.location && ev.location.value) return ev.location.value;
+                    if (ev.location && typeof ev.location === 'object') {
+                        return JSON.stringify(ev.location);
+                    }
+                    if (ev.location) return String(ev.location);
+                    return 'Non précisée';
+                };
+                const getDescription = () => {
+                    if (typeof ev.description === 'string') return ev.description;
+                    if (ev.description && ev.description.value) return ev.description.value;
+                    if (ev.description && typeof ev.description === 'object') {
+                        return JSON.stringify(ev.description);
+                    }
+                    if (ev.description) return String(ev.description);
+                    return '';
+                };
+
+                const summary = getSummary();
+                const location = getLocation();
+                const description = getDescription();
+
+                // Parser le format Pronote: "Matière - Professeur(s) - [Salle complexe] - Salle"
+                let matiere = summary;
+                let salle = location;
+                let professeur = 'Non précisé';
+                
+                // Essayer d'extraire depuis le summary au format Pronote
+                const parts = summary.split(' - ');
+                
+                if (parts.length >= 2) {
+                    matiere = parts[0].trim();
+                    professeur = parts[1].trim();
+                    
+                    // Chercher la salle entre crochets (format avec salle complexe)
+                    const salleMatch = summary.match(/\[([^\]]+)\]/);
+                    if (salleMatch) {
+                        salle = salleMatch[1].trim();
+                    } else if (parts.length >= 3) {
+                        // Sinon prendre le dernier élément (salle simple)
+                        // Éliminer les éléments qui sont des cours (contiennent "cours" ou "TP")
+                        for (let i = parts.length - 1; i >= 2; i--) {
+                            const part = parts[i].trim();
+                            if (!part.toLowerCase().includes('cours') && !part.toLowerCase().includes('tp')) {
+                                salle = part;
+                                break;
+                            }
+                        }
+                    } else {
+                        salle = location || 'Non précisée';
+                    }
+                } else {
+                    salle = location || 'Non précisée';
+                }
+                
+                // Fallback: chercher le professeur dans la description si pas trouvé
+                if (professeur === 'Non précisé' || professeur === '') {
+                    const profMatch = description.match(/Professeur[s]?\s*:\s*([^\n]+)/i);
+                    if (profMatch) {
+                        professeur = profMatch[1].trim();
+                    }
+                }
+
+                coursPourJour.push({
+                    matiere: matiere,
+                    heure: `${formatterHeure(ev.start)} - ${formatterHeure(ev.end)}`,
+                    salle: salle,
+                    professeur: professeur
+                });
+            }
+
+            if (coursPourJour.length > 0) {
+                cours = coursPourJour;
+                dateSelectionnee = jourCible;
+                decalageJour = offset;
+                break;
+            }
+        }
+
+        const jour = dateSelectionnee.toLocaleDateString('fr-FR', { weekday: 'long' });
+        const date = dateSelectionnee.toLocaleDateString('fr-FR');
+
+        let message = null;
+        if (cours.length === 0) {
+            message = 'Aucun cours trouvé dans Pronote pour les 7 prochains jours.';
+        } else if (decalageJour > 0) {
+            message = 'Aucun cours aujourd’hui. Affichage du prochain jour où des cours sont prévus.';
+        }
+        logEvent('SUCCESS', 'Emploi du temps récupéré', { jour, nbCours: cours.length });
+        const edt = {
+            jour,
+            date,
+            cours,
+            message
+        };
+
+        res.json({
+            success: true,
+            data: edt
+        });
+
+    } catch (error) {
+        logEvent('ERROR', 'Erreur Pronote', { message: error.message, code: error.code });
+        res.status(500).json({
+            success: false,
+            message: 'Erreur lors de la récupération de l\'emploi du temps'
+        });
+    }
+});
+
+// Route pour lister les fichiers locaux (documents et vidéos)
+app.get('/api/fichiers', async (req, res) => {
+    try {
+        logEvent('INFO', 'Listing des fichiers');
+        // Chemin par défaut - vous pouvez le modifier selon vos besoins
+        const dossierFichiers = process.env.DOSSIER_FICHIERS || path.join(__dirname, 'fichiers');
+        
+        // Créer le dossier s'il n'existe pas
+        await fs.ensureDir(dossierFichiers);
+        
+        // Extensions supportées
+        const extensionsDocuments = ['.pdf', '.doc', '.docx', '.txt', '.odt', '.xls', '.xlsx', '.ppt', '.pptx'];
+        const extensionsVideos = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'];
+        
+        const fichiers = await fs.readdir(dossierFichiers);
+        const fichiersAvecInfos = [];
+        
+        for (const fichier of fichiers) {
+            const cheminComplet = path.join(dossierFichiers, fichier);
+            const stats = await fs.stat(cheminComplet);
+            
+            if (stats.isFile()) {
+                const ext = path.extname(fichier).toLowerCase();
+                const type = extensionsVideos.includes(ext) ? 'video' : 
+                            extensionsDocuments.includes(ext) ? 'document' : 'autre';
+                
+                fichiersAvecInfos.push({
+                    nom: fichier,
+                    type: type,
+                    taille: stats.size,
+                    dateModification: stats.mtime,
+                    chemin: `/api/fichiers/lecture/${encodeURIComponent(fichier)}`
+                });
+            }
+        }
+        
+        logEvent('SUCCESS', 'Fichiers listés', { nombre: fichiersAvecInfos.length });
+
+        res.json({
+            success: true,
+            dossier: dossierFichiers,
+            fichiers: fichiersAvecInfos
+        });
+    } catch (error) {
+        logEvent('ERROR', 'Erreur listing fichiers', { message: error.message, code: error.code });
+        res.status(500).json({
+            success: false,
+            message: 'Erreur lors de la lecture des fichiers'
+        });
+    }
+});
+
+// Route pour servir les fichiers (lecture)
+app.get('/api/fichiers/lecture/:nomFichier', async (req, res) => {
+    try {
+        const nomFichier = decodeURIComponent(req.params.nomFichier);
+        logEvent('INFO', 'Lecture fichier', { fichier: nomFichier });
+        const dossierFichiers = process.env.DOSSIER_FICHIERS || path.join(__dirname, 'fichiers');
+        const cheminFichier = path.join(dossierFichiers, nomFichier);
+        
+        // Vérifier que le fichier existe
+        if (!await fs.pathExists(cheminFichier)) {
+            logEvent('WARNING', 'Fichier non trouvé', { fichier: nomFichier });
+            return res.status(404).json({ success: false, message: 'Fichier non trouvé' });
+        }
+        
+        logEvent('SUCCESS', 'Fichier servi', { fichier: nomFichier });
+        // Servir le fichier
+        res.sendFile(cheminFichier);
+    } catch (error) {
+        logEvent('ERROR', 'Erreur lecture fichier', { message: error.message, code: error.code });
+        res.status(500).json({
+            success: false,
+            message: 'Erreur lors de la lecture du fichier'
+        });
+    }
+});
+
+// Stockage temporaire de la sélection (en mémoire)
+let selectionMedias = [];
+let selectionMediasDuration = {}; // {nom: dureeSecondes}
+
+// Endpoint pour mettre à jour la sélection de médias
+app.post('/api/selection', (req, res) => {
+    const { fichiers } = req.body;
+    if (!Array.isArray(fichiers)) {
+        return res.status(400).json({ success: false, message: 'Format attendu: { fichiers: [ ... ] }' });
+    }
+
+    // Supporte une liste de string ou d'objet { nom, duration }
+    const updatedSelection = [];
+
+    fichiers.forEach(item => {
+        if (typeof item === 'string') {
+            updatedSelection.push(item);
+            if (!selectionMediasDuration[item]) {
+                selectionMediasDuration[item] = 10;
+            }
+        } else if (item && typeof item === 'object' && item.nom) {
+            updatedSelection.push(item.nom);
+            selectionMediasDuration[item.nom] = Number(item.duration) > 0 ? Number(item.duration) : 10;
+        }
+    });
+
+    selectionMedias = [...new Set(updatedSelection)];
+
+    // Supprimer les durée des fichiers non sélectionnés
+    Object.keys(selectionMediasDuration).forEach(n => {
+        if (!selectionMedias.includes(n)) delete selectionMediasDuration[n];
+    });
+
+    logEvent('INFO', 'Sélection de médias mise à jour', { selection: selectionMedias, durations: selectionMediasDuration });
+    
+    // Notifier les clients Raspberry via WebSocket
+    broadcastMediasList();
+    
+    res.json({ success: true, selection: selectionMedias, durations: selectionMediasDuration });
+});
+
+// Endpoint pour obtenir la sélection courante (pour EduVision-Beta)
+app.get('/api/medias', async (req, res) => {
+    try {
+        const dossierFichiers = process.env.DOSSIER_FICHIERS || path.join(__dirname, 'fichiers');
+        const fichiersInfos = [];
+        for (const nom of selectionMedias) {
+            if (nom === 'camera') {
+                if (currentDisplayMode === 'camera') {
+                    fichiersInfos.push({
+                        nom: 'camera',
+                        type: 'camera',
+                        duration: selectionMediasDuration[nom] || 30,
+                        url: '/camera-page.html'
+                    });
+                }
+            } else {
+                if (currentDisplayMode === 'documents') {
+                    const cheminComplet = path.join(dossierFichiers, nom);
+                    if (await fs.pathExists(cheminComplet)) {
+                        const stats = await fs.stat(cheminComplet);
+                        fichiersInfos.push({
+                            nom,
+                            taille: stats.size,
+                            dateModification: stats.mtime,
+                            duration: selectionMediasDuration[nom] || 10,
+                            url: `/api/fichiers/lecture/${encodeURIComponent(nom)}`
+                        });
+                    }
+                }
+            }
+        }
+        res.json({ success: true, medias: fichiersInfos });
+    } catch (error) {
+        logEvent('ERROR', 'Erreur récupération sélection', { message: error.message });
+        res.status(500).json({ success: false, message: 'Erreur lors de la récupération de la sélection' });
+    }
+});
+
+// Route pour uploader des fichiers
+app.post('/api/upload', upload.array('files'), async (req, res) => {
+    try {
+        logEvent('INFO', 'Upload de fichiers', { nombre: req.files.length, ip: req.ip });
+        const fichiersUploades = req.files.map(file => file.originalname);
+        
+        // Ajouter les fichiers uploadés à la sélection de manière unique
+        selectionMedias = [...new Set([...selectionMedias, ...fichiersUploades])];
+        fichiersUploades.forEach(nom => {
+            if (!selectionMediasDuration[nom]) selectionMediasDuration[nom] = 10;
+        });
+        
+        logEvent('SUCCESS', 'Fichiers uploadés et ajoutés à la sélection', { 
+            fichiers: fichiersUploades,
+            selectionTotale: selectionMedias.length,
+            durations: selectionMediasDuration
+        });
+        
+        res.json({ 
+            success: true, 
+            fichiers: fichiersUploades,
+            selection: selectionMedias 
+        });
+    } catch (error) {
+        logEvent('ERROR', 'Erreur upload fichiers', { message: error.message });
+        res.status(500).json({ success: false, message: 'Erreur lors de l\'upload des fichiers' });
+    }
+});
+
+// Route pour supprimer un fichier
+app.delete('/api/fichiers/:nomFichier', async (req, res) => {
+    try {
+        const nomFichier = decodeURIComponent(req.params.nomFichier);
+        logEvent('INFO', 'Suppression fichier', { fichier: nomFichier });
+        const dossierFichiers = process.env.DOSSIER_FICHIERS || path.join(__dirname, 'fichiers');
+        const cheminFichier = path.join(dossierFichiers, nomFichier);
+        
+        if (!await fs.pathExists(cheminFichier)) {
+            logEvent('WARNING', 'Fichier non trouvé pour suppression', { fichier: nomFichier });
+            return res.status(404).json({ success: false, message: 'Fichier non trouvé' });
+        }
+        
+        await fs.unlink(cheminFichier);
+        
+        // Retirer de la sélection si présent
+        selectionMedias = selectionMedias.filter(f => f !== nomFichier);
+        
+        logEvent('SUCCESS', 'Fichier supprimé', { fichier: nomFichier });
+        res.json({ success: true });
+    } catch (error) {
+        logEvent('ERROR', 'Erreur suppression fichier', { message: error.message });
+        res.status(500).json({ success: false, message: 'Erreur lors de la suppression du fichier' });
+    }
+});
+
+// Endpoint pour les logs du client
+app.post('/api/log', (req, res) => {
+    const { level, message, details } = req.body;
+    logEvent(level || 'INFO', `[CLIENT] ${message}`, details);
+    res.json({ success: true });
+});
+
+// Endpoint de diagnostic pour la Raspberry Pi
+app.get('/api/status', (req, res) => {
+    const dossierFichiers = process.env.DOSSIER_FICHIERS || path.join(__dirname, 'fichiers');
+    res.json({
+        success: true,
+        status: 'online',
+        server: {
+            port: PORT,
+            uptime: process.uptime(),
+            timestamp: new Date().toISOString()
+        },
+        medias: {
+            selected: selectionMedias.length,
+            items: selectionMedias
+        },
+        storage: {
+            folder: dossierFichiers
+        }
+    });
+});
+
+// Endpoint pour synchroniser et auto-sélectionner les fichiers
+app.post('/api/sync', async (req, res) => {
+    try {
+        logEvent('INFO', 'Synchronisation des fichiers depuis la Raspberry Pi');
+        const dossierFichiers = process.env.DOSSIER_FICHIERS || path.join(__dirname, 'fichiers');
+        
+        // Lister tous les fichiers
+        const fichiers = await fs.readdir(dossierFichiers);
+        logEvent('DEBUG', `Fichiers trouvés: ${fichiers.length}`, { fichiers });
+        const fichiersCandidats = [];
+        
+        // Extensions supportées
+        const extensionsDocuments = ['.pdf', '.doc', '.docx', '.txt', '.odt', '.xls', '.xlsx', '.ppt', '.pptx'];
+        const extensionsVideos = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'];
+        const extensionsImages = ['.jpg', '.jpeg', '.png', '.gif', '.webp'];
+        
+        for (const fichier of fichiers) {
+            const cheminComplet = path.join(dossierFichiers, fichier);
+            try {
+                const stats = await fs.stat(cheminComplet);
+                
+                if (stats.isFile()) {
+                    const ext = path.extname(fichier).toLowerCase();
+                    logEvent('DEBUG', `Vérification extension: ${fichier} -> ${ext}`);
+                    
+                    // Vérifier que c'est un type de fichier supporté
+                    if ([...extensionsDocuments, ...extensionsVideos, ...extensionsImages].includes(ext)) {
+                        fichiersCandidats.push(fichier);
+                        logEvent('DEBUG', `Fichier accepté: ${fichier}`);
+                    } else {
+                        logEvent('DEBUG', `Fichier rejeté (extension non supportée): ${fichier}`);
+                    }
+                }
+            } catch (err) {
+                logEvent('DEBUG', `Erreur lecture fichier: ${fichier}`, { error: err.message });
+            }
+        }
+        
+        // Mettre à jour la sélection
+        selectionMedias = fichiersCandidats;
+        
+        logEvent('SUCCESS', 'Synchronisation complète', { 
+            nombreFichiers: fichiersCandidats.length,
+            fichiers: fichiersCandidats
+        });
+        
+        res.json({ 
+            success: true, 
+            medias: fichiersCandidats.map(nom => ({
+                nom,
+                url: `/api/fichiers/lecture/${encodeURIComponent(nom)}`
+            }))
+        });
+    } catch (error) {
+        logEvent('ERROR', 'Erreur synchronisation', { message: error.message, stack: error.stack });
+        res.status(500).json({ success: false, message: 'Erreur lors de la synchronisation' });
+    }
+});
+
+// ===================== ROUTES DES CAPTEURS =====================
+// Route GET pour récupérer les données actuelles des capteurs
+app.get('/api/sensors', async (req, res) => {
+    try {
+        logEvent('INFO', 'Appel API capteurs');
+        const sensorData = await sensorsModule.readAllSensors();
+        logEvent('SUCCESS', 'Données capteurs récupérées', {
+            temperature: sensorData.temperature,
+            humidity: sensorData.humidity,
+            air_quality: sensorData.air_quality
+        });
+        res.json({
+            success: true,
+            data: sensorData
+        });
+    } catch (err) {
+        logEvent('ERROR', 'Erreur API capteurs', { message: err.message });
+        res.status(500).json({
+            success: false,
+            message: 'Erreur lors de la lecture des capteurs',
+            error: err.message
+        });
+    }
+});
+
+// Route POST pour activer/désactiver la transmission Socket.IO des capteurs
+app.post('/api/sensors/subscribe', (req, res) => {
+    logEvent('INFO', 'Demande d\'activation de la transmission des capteurs');
+    
+    // Si l'interval n'existe pas, le démarrer
+    if (!sensorInterval && sensorClients.size > 0) {
+        sensorInterval = setInterval(broadcastSensorData, 1000); // Envoyer toutes les secondes
+        logEvent('INFO', 'Transmission des capteurs activée');
+    }
+    
+    res.json({ success: true, message: 'Transmission des capteurs activée' });
+});
+
+// Route POST pour désactiver la transmission Socket.IO des capteurs
+app.post('/api/sensors/unsubscribe', (req, res) => {
+    logEvent('INFO', 'Demande de désactivation de la transmission des capteurs');
+    
+    if (sensorInterval) {
+        clearInterval(sensorInterval);
+        sensorInterval = null;
+        logEvent('INFO', 'Transmission des capteurs désactivée');
+    }
+    
+    res.json({ success: true, message: 'Transmission des capteurs désactivée' });
+});
+
+// ===================== FIN ROUTES DES CAPTEURS =====================
+
+// Gérer les erreurs d'écoute (ex: EADDRINUSE)
+server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        logEvent('ERROR', `Port ${PORT} déjà utilisé : supprimer l'instance existante ou changer de port`);
+        console.error(`Port ${PORT} déjà utilisé (EADDRINUSE).`);
+        process.exit(1);
+    } else {
+        logEvent('ERROR', 'Erreur serveur non gérée', { message: err.message, code: err.code });
+        console.error('Erreur serveur non gérée :', err);
+        process.exit(1);
+    }
+});
+
+// API pour gérer le mode d'affichage des clients
+app.get('/api/display-mode', (req, res) => {
+    res.json({
+        success: true,
+        mode: currentDisplayMode
+    });
+});
+
+app.post('/api/display-mode', express.json(), (req, res) => {
+    const { mode } = req.body;
+    if (mode === 'documents' || mode === 'camera') {
+        currentDisplayMode = mode;
+        logEvent('INFO', 'Mode d\'affichage changé', { mode });
+        io.emit('display-mode-changed', { mode });
+        // Notifier les clients Raspberry du changement de mode
+        broadcastMediasList();
+        res.json({ success: true, mode });
+    } else {
+        res.status(400).json({ success: false, message: 'Mode invalide' });
+    }
+});
+
+app.get('/api/display-page', (req, res) => {
+    res.json({
+        success: true,
+        page: currentDisplayPage,
+        mode: currentDisplayMode
+    });
+});
+
+app.post('/api/display-page', express.json(), (req, res) => {
+    const { page } = req.body;
+    if (page && setDisplayPage(String(page))) {
+        res.json({ success: true, page: currentDisplayPage, mode: currentDisplayMode });
+    } else {
+        res.status(400).json({ success: false, message: 'Page d\'affichage invalide' });
+    }
+});
+
+// Démarrer le serveur
+server.listen(PORT, () => {
+    logEvent('SUCCESS', `Serveur démarré sur http://localhost:${PORT}`);
+    logEvent('INFO', `Dossier fichiers: ${process.env.DOSSIER_FICHIERS || path.join(__dirname, 'fichiers')}`);
+    logEvent('INFO', `Logs sauvegardés dans: ${logsDir}`);
+    logEvent('INFO', 'Socket.IO initialisé pour la transmission des capteurs');
+    
+    // Démarrer la transmission automatique si des clients sont connectés
+    // Note: Premier client déclenchera l'interval
+    const checkClients = setInterval(() => {
+        if (sensorClients.size > 0 && !sensorInterval) {
+            sensorInterval = setInterval(broadcastSensorData, 1000);
+            logEvent('INFO', 'Transmission automatique des capteurs activée');
+            clearInterval(checkClients);
+        }
+    }, 100);
+});
+

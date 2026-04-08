@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tableau de bord des capteurs</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 8px 16px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 20px;
+            font-size: 0.9em;
+        }
+
+        .status.connected {
+            background: rgba(76, 175, 80, 0.3);
+            color: #4caf50;
+        }
+
+        .status.disconnected {
+            background: rgba(244, 67, 54, 0.3);
+            color: #f44336;
+        }
+
+        .sensors-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+
+        .sensor-card {
+            background: white;
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .sensor-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+        }
+
+        .sensor-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .sensor-icon {
+            font-size: 2em;
+            margin-right: 12px;
+        }
+
+        .sensor-title {
+            font-size: 0.9em;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .sensor-value {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #333;
+            margin: 15px 0;
+        }
+
+        .sensor-unit {
+            font-size: 0.5em;
+            color: #999;
+            margin-left: 5px;
+        }
+
+        .sensor-timestamp {
+            font-size: 0.8em;
+            color: #999;
+            border-top: 1px solid #eee;
+            padding-top: 10px;
+        }
+
+        .temperature .sensor-value {
+            color: #ff6b6b;
+        }
+
+        .humidity .sensor-value {
+            color: #4ecdc4;
+        }
+
+        .air-quality .sensor-value {
+            color: #ffd93d;
+        }
+
+        .motion .sensor-value {
+            color: #a8e6cf;
+        }
+
+        .motion.active .sensor-value {
+            color: #ff6b6b;
+            animation: pulse 0.5s ease-in-out;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.7;
+            }
+        }
+
+        .controls {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 40px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .controls h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.95em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 600;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #f5f5f5;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .error.show {
+            display: block;
+        }
+
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            margin-top: 20px;
+            border-radius: 4px;
+            color: #1565c0;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            background: #4caf50;
+            border-radius: 50%;
+            animation: blink 1s infinite;
+            margin-left: 5px;
+        }
+
+        @keyframes blink {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.3;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Tableau de Bord des Capteurs</h1>
+            <div class="status disconnected" id="connectionStatus">
+                <span>●</span> Déconnecté<span class="loading" id="loadingDot" style="display: none;"></span>
+            </div>
+        </div>
+
+        <div class="error" id="errorBox"></div>
+
+        <div class="sensors-grid">
+            <div class="sensor-card temperature">
+                <div class="sensor-header">
+                    <div class="sensor-icon">🌡️</div>
+                    <div class="sensor-title">Température</div>
+                </div>
+                <div class="sensor-value">
+                    <span id="temperatureValue">--</span>
+                    <span class="sensor-unit">°C</span>
+                </div>
+                <div class="sensor-timestamp" id="temperatureTime">--</div>
+            </div>
+
+            <div class="sensor-card humidity">
+                <div class="sensor-header">
+                    <div class="sensor-icon">💧</div>
+                    <div class="sensor-title">Humidité</div>
+                </div>
+                <div class="sensor-value">
+                    <span id="humidityValue">--</span>
+                    <span class="sensor-unit">%</span>
+                </div>
+                <div class="sensor-timestamp" id="humidityTime">--</div>
+            </div>
+
+            <div class="sensor-card air-quality">
+                <div class="sensor-header">
+                    <div class="sensor-icon">💨</div>
+                    <div class="sensor-title">Qualité de l'Air</div>
+                </div>
+                <div class="sensor-value">
+                    <span id="airQualityValue">--</span>
+                    <span class="sensor-unit">ppm</span>
+                </div>
+                <div class="sensor-timestamp" id="airQualityTime">--</div>
+            </div>
+
+            <div class="sensor-card motion">
+                <div class="sensor-header">
+                    <div class="sensor-icon">🚀</div>
+                    <div class="sensor-title">Mouvement</div>
+                </div>
+                <div class="sensor-value">
+                    <span id="motionValue">Inactif</span>
+                </div>
+                <div class="sensor-timestamp" id="motionTime">--</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <h3>Contrôles</h3>
+            <div class="button-group">
+                <button class="btn-primary" id="refreshBtn">🔄 Rafraîchir</button>
+                <button class="btn-secondary" id="subscribeBtn">📡 Activer flux temps réel</button>
+                <button class="btn-secondary" id="unsubscribeBtn">⏹️ Arrêter flux</button>
+            </div>
+        </div>
+
+        <div class="info-box">
+            <strong>ℹ️ Information :</strong> Les données des capteurs sont affichées en temps réel.
+            Utilisez "Activer flux temps réel" pour recevoir les données via WebSocket toutes les secondes.
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let isConnected = false;
+        let isSubscribed = false;
+
+        // Éléments du DOM
+        const statusEl = document.getElementById('connectionStatus');
+        const loadingDot = document.getElementById('loadingDot');
+        const errorBox = document.getElementById('errorBox');
+        const refreshBtn = document.getElementById('refreshBtn');
+        const subscribeBtn = document.getElementById('subscribeBtn');
+        const unsubscribeBtn = document.getElementById('unsubscribeBtn');
+
+        // Événements Socket.IO
+        socket.on('connect', () => {
+            console.log('Connecté au serveur');
+            isConnected = true;
+            updateConnectionStatus(true);
+            loadingDot.style.display = 'none';
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Déconnecté du serveur');
+            isConnected = false;
+            isSubscribed = false;
+            updateConnectionStatus(false);
+            updateButtonStates();
+        });
+
+        socket.on('sensor_data', (data) => {
+            console.log('Données capteurs reçues:', data);
+            updateSensorDisplay(data);
+        });
+
+        socket.on('error', (error) => {
+            console.error('Erreur Socket.IO:', error);
+            showError('Erreur de connexion: ' + error);
+        });
+
+        // Mise à jour de l'affichage
+        function updateConnectionStatus(connected) {
+            if (connected) {
+                statusEl.classList.remove('disconnected');
+                statusEl.classList.add('connected');
+                statusEl.innerHTML = '<span>●</span> Connecté';
+            } else {
+                statusEl.classList.remove('connected');
+                statusEl.classList.add('disconnected');
+                statusEl.innerHTML = '<span>●</span> Déconnecté';
+            }
+        }
+
+        function updateSensorDisplay(data) {
+            if (data.temperature !== null && data.temperature !== undefined) {
+                document.getElementById('temperatureValue').textContent = data.temperature.toFixed(2);
+            }
+            if (data.humidity !== null && data.humidity !== undefined) {
+                document.getElementById('humidityValue').textContent = data.humidity.toFixed(2);
+            }
+            if (data.air_quality !== null && data.air_quality !== undefined) {
+                document.getElementById('airQualityValue').textContent = data.air_quality;
+            }
+            
+            const motionCard = document.querySelector('.motion');
+            if (data.motion === 1) {
+                document.getElementById('motionValue').textContent = 'Détecté';
+                motionCard.classList.add('active');
+            } else {
+                document.getElementById('motionValue').textContent = 'Inactif';
+                motionCard.classList.remove('active');
+            }
+
+            // Mettre à jour les timestamps
+            const time = new Date(data.timestamp).toLocaleTimeString('fr-FR');
+            document.getElementById('temperatureTime').textContent = 'Mis à jour: ' + time;
+            document.getElementById('humidityTime').textContent = 'Mis à jour: ' + time;
+            document.getElementById('airQualityTime').textContent = 'Mis à jour: ' + time;
+            document.getElementById('motionTime').textContent = 'Mis à jour: ' + time;
+        }
+
+        function updateButtonStates() {
+            subscribeBtn.disabled = !isConnected || isSubscribed;
+            unsubscribeBtn.disabled = !isConnected || !isSubscribed;
+        }
+
+        function showError(message) {
+            errorBox.textContent = '❌ ' + message;
+            errorBox.classList.add('show');
+            setTimeout(() => {
+                errorBox.classList.remove('show');
+            }, 5000);
+        }
+
+        // Event listeners des boutons
+        refreshBtn.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/api/sensors');
+                const result = await response.json();
+                if (result.success) {
+                    updateSensorDisplay(result.data);
+                } else {
+                    showError(result.message || 'Erreur lors de la récupération des données');
+                }
+            } catch (err) {
+                showError('Erreur réseau: ' + err.message);
+            }
+        });
+
+        subscribeBtn.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/api/sensors/subscribe', { method: 'POST' });
+                const result = await response.json();
+                if (result.success) {
+                    isSubscribed = true;
+                    updateButtonStates();
+                    console.log('Flux temps réel activé');
+                } else {
+                    showError(result.message || 'Erreur lors de l\'activation');
+                }
+            } catch (err) {
+                showError('Erreur réseau: ' + err.message);
+            }
+        });
+
+        unsubscribeBtn.addEventListener('click', async () => {
+            try {
+                const response = await fetch('/api/sensors/unsubscribe', { method: 'POST' });
+                const result = await response.json();
+                if (result.success) {
+                    isSubscribed = false;
+                    updateButtonStates();
+                    console.log('Flux temps réel désactivé');
+                } else {
+                    showError(result.message || 'Erreur lors de la désactivation');
+                }
+            } catch (err) {
+                showError('Erreur réseau: ' + err.message);
+            }
+        });
+
+        // Initialisation
+        updateButtonStates();
+        
+        // Loading indicator
+        loadingDot.style.display = 'none';
+    </script>
+</body>
+</html>

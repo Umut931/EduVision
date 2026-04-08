@@ -1,0 +1,110 @@
+<!-- QUICKREF - Capteurs EduVision -->
+
+# ⚡ Référence Rapide - Capteurs
+
+## 🎯 En 10 secondes
+
+```bash
+npm start
+# http://localhost:3000/sensors-dashboard.html
+```
+
+## 📊 Format données
+
+```json
+{
+  "temperature": 22.45,      // °C
+  "humidity": 52.30,         // %
+  "air_quality": 425,        // ppm
+  "motion": 0,               // 0 ou 1
+  "timestamp": 1710000000000 // ms
+}
+```
+
+## 🔗 Endpoints
+
+| Méthode | Route | Usage |
+|---------|-------|-------|
+| GET | `/api/sensors` | Lecture une fois |
+| POST | `/api/sensors/subscribe` | Activer WebSocket |
+| POST | `/api/sensors/unsubscribe` | Désactiver WebSocket |
+
+## 📡 WebSocket
+
+```javascript
+socket.on('sensor_data', (data) => {
+    console.log(data);
+});
+```
+
+## 🌐 URLs
+
+| Page | URL |
+|------|-----|
+| Dashboard | `http://localhost:3000/sensors-dashboard.html` |
+| Guide | `http://localhost:3000/sensors-quickstart.html` |
+| API | `http://localhost:3000/api/sensors` |
+
+## 📁 Fichiers clés
+
+```
+/services/sensors.js              # Module
+server.js                          # Routes + Socket.IO
+/public/sensors-dashboard.html     # Dashboard
+SENSORS_EXAMPLES.js                # Exemples
+SENSORS_DOCUMENTATION.md           # Docs
+```
+
+## 🧪 Test
+
+```bash
+node test-sensors.js
+```
+
+## 📖 Docs
+
+| Niveau | Fichier |
+|--------|---------|
+| Rapide | CAPTEURS_START.md |
+| Moyen | sensors-quickstart.html |
+| Complet | SENSORS_DOCUMENTATION.md |
+| Code | SENSORS_EXAMPLES.js |
+
+## 🔧 Config
+
+**Pin GPIO:** Modifier `/services/sensors.js` ligne 52  
+**Adresse I2C:** Modifier `/services/sensors.js` ligne 31  
+**Port:** Modifier `server.js` ligne 20
+
+## 🚨 Pas de données?
+
+1. Les capteurs ne sont probablement pas branchés
+2. Le fallback s'activate automatiquement
+3. C'est normal! ✅
+
+## 💻 Code exemple
+
+```javascript
+// FETCH
+const r = await fetch('/api/sensors');
+const d = await r.json();
+console.log(d.data.temperature);
+
+// SOCKET.IO
+const socket = io();
+socket.on('sensor_data', (d) => {
+    console.log(d.temperature);
+});
+```
+
+## ✅ Status
+
+- ✅ Backend: Prêt
+- ✅ Frontend: Prêt
+- ✅ Tests: 100% passés
+- ✅ Docs: Complètes
+- 🚀 **PRÊT À L'EMPLOI**
+
+---
+
+**Plus d'infos:** [CAPTEURS_START.md](CAPTEURS_START.md)

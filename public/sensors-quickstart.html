@@ -1,0 +1,572 @@
+<!-- GUIDE DE DÉMARRAGE RAPIDE - Capteurs -->
+
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Guide Capteurs - EduVision</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f7fa;
+            padding: 20px;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .content {
+            padding: 40px 30px;
+        }
+
+        .section {
+            margin-bottom: 40px;
+        }
+
+        .section h2 {
+            color: #333;
+            margin-bottom: 20px;
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        .step {
+            background: #f9f9f9;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        .step-number {
+            display: inline-block;
+            width: 35px;
+            height: 35px;
+            background: #667eea;
+            color: white;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 35px;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+
+        code {
+            background: #f0f0f0;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            color: #d63384;
+        }
+
+        pre {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 15px 0;
+            font-size: 0.9em;
+        }
+
+        .api-endpoint {
+            background: #e8f4f8;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 6px;
+            border-left: 4px solid #2196f3;
+        }
+
+        .api-endpoint .method {
+            display: inline-block;
+            padding: 3px 8px;
+            background: #2196f3;
+            color: white;
+            border-radius: 3px;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+
+        .api-endpoint code {
+            color: #1976d2;
+        }
+
+        .checkbox-list {
+            list-style: none;
+        }
+
+        .checkbox-list li {
+            padding: 8px 0;
+        }
+
+        .checkbox-list li:before {
+            content: "✓ ";
+            color: #4caf50;
+            font-weight: bold;
+            margin-right: 8px;
+        }
+
+        .warning {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        .success {
+            background: #d4edda;
+            border-left: 4px solid #28a745;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        .info {
+            background: #d1ecf1;
+            border-left: 4px solid #17a2b8;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 4px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+
+        table th,
+        table td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        table th {
+            background: #f5f5f5;
+            font-weight: bold;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        a.button {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            transition: background 0.3s ease;
+            text-align: center;
+        }
+
+        a.button:hover {
+            background: #5568d3;
+        }
+
+        a.button.secondary {
+            background: #6c757d;
+        }
+
+        a.button.secondary:hover {
+            background: #5a6268;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin: 20px 0;
+        }
+
+        .card {
+            background: #f9f9f9;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .card h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        footer {
+            background: #f5f5f5;
+            padding: 20px 30px;
+            text-align: center;
+            color: #666;
+            border-top: 1px solid #ddd;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 Capteurs EduVision</h1>
+            <p>Guide de démarrage rapide</p>
+        </div>
+
+        <div class="content">
+            <!-- SECTION 1: APERÇU -->
+            <div class="section">
+                <h2>🎯 Aperçu</h2>
+                <p>
+                    Le module capteurs EduVision vous permet de lire et afficher les données de capteurs physiques
+                    (Raspberry Pi + Grove) en temps réel. Le système marche avec ou sans capteurs grâce au fallback automatique.
+                </p>
+                <div class="success" style="margin-top: 20px;">
+                    <strong>✓ Installation complète!</strong> Les capteurs sont prêts à l'emploi.
+                </div>
+            </div>
+
+            <!-- SECTION 2: DÉMARRAGE RAPIDE -->
+            <div class="section">
+                <h2>🚀 Démarrage Rapide (3 étapes)</h2>
+
+                <div class="step">
+                    <strong><span class="step-number">1</span>Démarrer le serveur</strong>
+                    <pre>npm start</pre>
+                    <p style="margin-top: 10px;">ou avec nodemon pour le hot-reload:</p>
+                    <pre>npm run dev</pre>
+                </div>
+
+                <div class="step">
+                    <strong><span class="step-number">2</span>Accéder au dashboard</strong>
+                    <p>Ouvrez dans votre navigateur:</p>
+                    <pre>http://localhost:3000/sensors-dashboard.html</pre>
+                    <p style="margin-top: 10px;">Vous verrez le tableau de bord avec les 4 capteurs.</p>
+                </div>
+
+                <div class="step">
+                    <strong><span class="step-number">3</span>Activer le flux temps réel</strong>
+                    <p>Cliquez sur le bouton "📡 Activer flux temps réel" du dashboard.</p>
+                    <p>Les données s'affichent maintenant en direct toutes les secondes!</p>
+                </div>
+            </div>
+
+            <!-- SECTION 3: CAPTEURS DISPONIBLES -->
+            <div class="section">
+                <h2>🔌 Capteurs Disponibles</h2>
+
+                <div class="grid">
+                    <div class="card">
+                        <h3>🌡️ Température</h3>
+                        <p><strong>Type:</strong> BME280 (I2C)</p>
+                        <p><strong>Plage:</strong> -40°C à +85°C</p>
+                        <p><strong>Fallback:</strong> 20-25°C simulée</p>
+                    </div>
+
+                    <div class="card">
+                        <h3>💧 Humidité</h3>
+                        <p><strong>Type:</strong> BME280 (I2C)</p>
+                        <p><strong>Plage:</strong> 0% à 100%</p>
+                        <p><strong>Fallback:</strong> 50-65% simulée</p>
+                    </div>
+
+                    <div class="card">
+                        <h3>💨 Qualité de l'air</h3>
+                        <p><strong>Type:</strong> ADC ADS1115 (I2C)</p>
+                        <p><strong>Plage:</strong> 0-1000 ppm</p>
+                        <p><strong>Fallback:</strong> 300-500 ppm simulée</p>
+                    </div>
+
+                    <div class="card">
+                        <h3>🚀 Mouvement</h3>
+                        <p><strong>Type:</strong> PIR Sensor (GPIO17)</p>
+                        <p><strong>Plage:</strong> 0 (inactif) ou 1 (détecté)</p>
+                        <p><strong>Fallback:</strong> 0 (inactif)</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTION 4: API REST -->
+            <div class="section">
+                <h2>📡 API REST</h2>
+
+                <div class="api-endpoint">
+                    <span class="method">GET</span> <code>/api/sensors</code>
+                    <p style="margin-top: 10px;">Récupère les données actuelles des capteurs (une seule fois)</p>
+                </div>
+
+                <p><strong>Exemple:</strong></p>
+                <pre>curl http://localhost:3000/api/sensors</pre>
+
+                <p style="margin-top: 20px;"><strong>Réponse:</strong></p>
+                <pre>{
+  "success": true,
+  "data": {
+    "temperature": 22.45,
+    "humidity": 52.30,
+    "air_quality": 425,
+    "motion": 0,
+    "timestamp": 1710000000000
+  }
+}</pre>
+
+                <h3 style="margin-top: 30px; margin-bottom: 15px;">Activer/Désactiver le flux WebSocket</h3>
+
+                <div class="api-endpoint">
+                    <span class="method">POST</span> <code>/api/sensors/subscribe</code>
+                    <p style="margin-top: 10px;">Active l'envoi des données toutes les secondes</p>
+                </div>
+
+                <div class="api-endpoint">
+                    <span class="method">POST</span> <code>/api/sensors/unsubscribe</code>
+                    <p style="margin-top: 10px;">Désactive l'envoi des données</p>
+                </div>
+            </div>
+
+            <!-- SECTION 5: WEBSOCKET -->
+            <div class="section">
+                <h2>🔌 WebSocket (Socket.IO)</h2>
+
+                <p>Recevez les données des capteurs en temps réel:</p>
+
+                <pre>const socket = io('http://localhost:3000');
+
+socket.on('sensor_data', (data) => {
+    console.log('Température:', data.temperature);
+    console.log('Humidité:', data.humidity);
+    console.log('Qualité air:', data.air_quality);
+    console.log('Mouvement:', data.motion);
+});</pre>
+            </div>
+
+            <!-- SECTION 6: INTÉGRATION -->
+            <div class="section">
+                <h2>💻 Intégration dans votre code</h2>
+
+                <h3 style="margin-top: 20px; margin-bottom: 15px;">Option 1: Fetch (React, Angular, Vue)</h3>
+                <pre>const response = await fetch('/api/sensors');
+const result = await response.json();
+const { temperature, humidity } = result.data;</pre>
+
+                <h3 style="margin-top: 20px; margin-bottom: 15px;">Option 2: Socket.IO (Temps réel)</h3>
+                <pre>const socket = io();
+socket.on('sensor_data', (data) => {
+    // Mettre à jour l'interface
+});</pre>
+
+                <h3 style="margin-top: 20px; margin-bottom: 15px;">Option 3: Node.js (Backend)</h3>
+                <pre>const sensors = require('./services/sensors');
+const data = await sensors.readAllSensors();
+console.log(data);</pre>
+
+                <div class="info" style="margin-top: 20px;">
+                    <strong>ℹ️</strong> Voir <code>SENSORS_EXAMPLES.js</code> pour 10+ exemples détaillés!
+                </div>
+            </div>
+
+            <!-- SECTION 7: FORMAT DES DONNÉES -->
+            <div class="section">
+                <h2>📦 Format des Données</h2>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Champ</th>
+                            <th>Type</th>
+                            <th>Unité</th>
+                            <th>Exemple</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td>temperature</td>
+                            <td>number</td>
+                            <td>°C</td>
+                            <td>22.45</td>
+                        </tr>
+                        <tr>
+                            <td>humidity</td>
+                            <td>number</td>
+                            <td>%</td>
+                            <td>52.30</td>
+                        </tr>
+                        <tr>
+                            <td>air_quality</td>
+                            <td>number</td>
+                            <td>ppm</td>
+                            <td>425</td>
+                        </tr>
+                        <tr>
+                            <td>motion</td>
+                            <td>0 ou 1</td>
+                            <td>boolean</td>
+                            <td>0 (inactif)</td>
+                        </tr>
+                        <tr>
+                            <td>timestamp</td>
+                            <td>number</td>
+                            <td>ms</td>
+                            <td>1710000000000</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- SECTION 8: TESTS -->
+            <div class="section">
+                <h2>🧪 Tests</h2>
+
+                <h3 style="margin-top: 15px; margin-bottom: 15px;">Tester l'API REST</h3>
+                <pre>curl http://localhost:3000/api/sensors | jq</pre>
+
+                <h3 style="margin-top: 20px; margin-bottom: 15px;">Vérifier les capteurs I2C</h3>
+                <pre>i2cdetect -y 1</pre>
+
+                <p style="margin-top: 20px;"><strong>Valeurs attendues:</strong></p>
+                <ul class="checkbox-list">
+                    <li><code>48</code> = ADS1115 (qualité air)</li>
+                    <li><code>76</code> = BME280 (température/humidité)</li>
+                </ul>
+
+                <h3 style="margin-top: 20px; margin-bottom: 15px;">Vérifier les logs</h3>
+                <pre>tail -f logs/$(date +%Y-%m-%d).log</pre>
+            </div>
+
+            <!-- SECTION 9: TROUBLESHOOTING -->
+            <div class="section">
+                <h2>⚠️ Troubleshooting</h2>
+
+                <div class="step">
+                    <strong>❓ Les données affichent NaN ou --</strong>
+                    <p style="margin-top: 10px;">
+                        C'est normal! Les capteurs ne sont probablement pas branchés.
+                        Le système utilise automatiquement des valeurs simulées.
+                        Vérifiez les logs: <code>tail -f logs/$(date +%Y-%m-%d).log</code>
+                    </p>
+                </div>
+
+                <div class="step">
+                    <strong>❓ "Port 3000 déjà utilisé"</strong>
+                    <p style="margin-top: 10px;">
+                        Tuer le processus: <code>lsof -i :3000 | grep LISTEN | awk '{print $2}' | xargs kill -9</code>
+                    </p>
+                </div>
+
+                <div class="step">
+                    <strong>❓ Socket.IO ne fonctionne pas</strong>
+                    <p style="margin-top: 10px;">
+                        Vérifier les logs du serveur et la connexion au port 3000.
+                        Vérifier que les modules sont installés: <code>npm install</code>
+                    </p>
+                </div>
+
+                <div class="step">
+                    <strong>❓ Le dashboard ne s'affiche pas</strong>
+                    <p style="margin-top: 10px;">
+                        Vérifier l'URL: <code>http://localhost:3000/sensors-dashboard.html</code>
+                        Vérifier la console du navigateur (F12) pour les erreurs
+                    </p>
+                </div>
+            </div>
+
+            <!-- SECTION 10: PROCHAINES ÉTAPES -->
+            <div class="section">
+                <h2>📚 Prochaines étapes</h2>
+
+                <ul class="checkbox-list">
+                    <li>Lire <code>SENSORS_DOCUMENTATION.md</code> pour la configuration avancée</li>
+                    <li>Consulter <code>SENSORS_EXAMPLES.js</code> pour 10+ exemples</li>
+                    <li>Brancher les capteurs (BME280, ADS1115, PIR) si disponibles</li>
+                    <li>Intégrer les données dans votre application</li>
+                    <li>Créer des alertes basées sur les seuils</li>
+                    <li>Sauvegarder les historiques en base de données</li>
+                </ul>
+            </div>
+
+            <!-- SECTION 11: RESSOURCES -->
+            <div class="section">
+                <h2>📖 Ressources</h2>
+
+                <div class="grid">
+                    <div class="card">
+                        <h3>📄 Documentation</h3>
+                        <p>Lire la documentation complète</p>
+                        <a href="SENSORS_DOCUMENTATION.md" class="button" style="display: block; margin-top: 10px;">
+                            Voir la docs
+                        </a>
+                    </div>
+
+                    <div class="card">
+                        <h3>💻 Exemples</h3>
+                        <p>10+ exemples d'intégration</p>
+                        <a href="SENSORS_EXAMPLES.js" class="button" style="display: block; margin-top: 10px;">
+                            Voir les exemples
+                        </a>
+                    </div>
+
+                    <div class="card">
+                        <h3>📊 Dashboard</h3>
+                        <p>Tableau de bord en temps réel</p>
+                        <a href="sensors-dashboard.html" class="button" style="display: block; margin-top: 10px;">
+                            Aller au dashboard
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SECTION 12: SUPPORT -->
+            <div class="section">
+                <h2>💬 Support</h2>
+
+                <div class="info">
+                    <strong>ℹ️ Besoin d'aide?</strong>
+                    <ol style="margin-top: 10px;">
+                        <li>Vérifier les logs: <code>tail -f logs/$(date +%Y-%m-%d).log</code></li>
+                        <li>Lire la documentation détaillée: <code>SENSORS_DOCUMENTATION.md</code></li>
+                        <li>Consulter les exemples: <code>SENSORS_EXAMPLES.js</code></li>
+                        <li>Vérifier le branchement du matériel</li>
+                    </ol>
+                </div>
+            </div>
+        </div>
+
+        <footer>
+            <p>📊 EduVision - Module Capteurs | Créé avec ❤️</p>
+            <p style="margin-top: 10px; font-size: 0.9em;">
+                Code isolé, modulaire et sans breaking changes ✓
+            </p>
+        </footer>
+    </div>
+</body>
+</html>
