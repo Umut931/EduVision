@@ -29,6 +29,37 @@ function afficherFichiers() {
                     <p style="grid-column: 1 / -1; text-align: center; color: #666;">Chargement de la sélection...</p>
                 </div>
             </div>
+
+            <div id="pdf-control-section" style="margin-bottom: 20px; border: 2px solid #28a745; border-radius: 10px; padding: 20px; background: #f8fff8;">
+                <h3>📄 Contrôle PDF synchronisé</h3>
+                <div id="pdf-status" style="margin-bottom: 15px; padding: 10px; background: #e8f5e8; border-radius: 5px; text-align: center;">
+                    Aucun PDF actif
+                </div>
+                
+                <!-- Mini-écran d'aperçu du PDF -->
+                <div id="pdf-preview-container" style="margin-bottom: 15px; border: 2px solid #28a745; border-radius: 8px; background: white; display: flex; flex-direction: column; align-items: center;">
+                    <div id="pdf-preview" style="width: 100%; height: 400px; background: #f5f5f5; overflow: auto; border-radius: 6px; position: relative; display: flex; align-items: center; justify-content: center;">
+                        <p style="color: #999; text-align: center;">Aucun PDF sélectionné</p>
+                    </div>
+                    
+                    <!-- Contrôles de zoom et scroll -->
+                    <div style="width: 100%; display: flex; justify-content: center; gap: 10px; padding: 12px; background: #f0f0f0; border-radius: 0 0 6px 6px;">
+                        <button class="btn-camera" style="background: #667eea;" onclick="pdfZoomOut()" id="pdf-zoom-out-btn" disabled>🔍− Dézoom</button>
+                        <span id="pdf-zoom-level" style="font-weight: bold; min-width: 80px; text-align: center;">100%</span>
+                        <button class="btn-camera" style="background: #667eea;" onclick="pdfZoomIn()" id="pdf-zoom-in-btn" disabled>Zoom 🔍+</button>
+                        <button class="btn-camera" style="background: #6c757d;" onclick="pdfResetZoom()" id="pdf-reset-zoom-btn" disabled>↺ Réinitialiser</button>
+                    </div>
+                </div>
+                
+                <!-- Contrôles de navigation des pages -->
+                <div style="display: flex; justify-content: center; gap: 10px; align-items: center; flex-wrap: wrap;">
+                    <button id="pdf-prev-btn" class="btn-camera" style="background: #6c757d;" onclick="pdfPrevPage()" disabled>⬅️ Précédent</button>
+                    <span id="pdf-page-info" style="font-weight: bold; min-width: 120px; text-align: center;">Page --/--</span>
+                    <button id="pdf-next-btn" class="btn-camera" style="background: #6c757d;" onclick="pdfNextPage()" disabled>Suivant ➡️</button>
+                    <button id="pdf-stop-btn" class="btn-camera" style="background: #dc3545;" onclick="pdfStopSync()">⏹️ Arrêter</button>
+                </div>
+            </div>
+
             <div id="files-list" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 15px;">
                 <p style="grid-column: 1 / -1; text-align: center; color: #666;">Chargement des fichiers...</p>
             </div>
@@ -39,6 +70,7 @@ function afficherFichiers() {
     chargerListeFichiers();
     chargerSelection();
     chargerStatus();
+    initPdfAutoRefresh();  // Initialiser l'actualisation automatique du PDF
     
     // Configurer le drag-and-drop
     configurerDragAndDrop();
@@ -285,20 +317,35 @@ function afficherListeFichiers(fichiers) {
         return;
     }
     
-    filesList.innerHTML = fichiers.map(fichier => `
+    filesList.innerHTML = fichiers.map(fichier => {
+        const isPdf = fichier.type === 'application/pdf';
+        const extraButton = isPdf ? `<button class="btn-camera pdf-sync-btn" style="background: #28a745;" title="Démarrer synchronisation PDF" data-filename="${escapeHtml(fichier.nom)}">📄🔄</button>` : '';
+        
+        return `
         <div class="file-card" style="border: 1px solid #ddd; border-radius: 8px; padding: 15px; background: white; display: flex; flex-direction: column; align-items: center; gap: 10px;">
             <div style="font-size: 2em;">${getFileIcon(fichier.type)}</div>
             <div style="text-align: center;">
                 <div style="font-weight: bold; word-break: break-word;">${fichier.nom}</div>
                 <div style="font-size: 0.8em; color: #666;">${formatTaille(fichier.taille)}</div>
             </div>
-            <div style="display: flex; gap: 5px;">
+            <div style="display: flex; gap: 5px; flex-wrap: wrap; justify-content: center;">
                 <button class="btn-camera" onclick="visualiserFichier('${fichier.nom}')" title="Visualiser">👁️</button>
                 <button class="btn-camera" onclick="ajouterSelection('${fichier.nom}')" title="Ajouter à la sélection">➕</button>
+                ${extraButton}
                 <button class="btn-camera" style="background: #d32f2f;" onclick="supprimerFichier('${fichier.nom}')" title="Supprimer">🗑️</button>
             </div>
         </div>
-    `).join('');
+        `;
+    }).join('');
+    
+    // Ajouter les event listeners pour les boutons PDF
+    document.querySelectorAll('.pdf-sync-btn').forEach(btn => {
+        btn.addEventListener('click', function() {
+            const fileName = this.getAttribute('data-filename');
+            console.log('🖱️ Clic bouton PDF sync:', fileName);
+            pdfStartSync(fileName);
+        });
+    });
 }
 
 // Fonction pour afficher la sélection actuelle
@@ -480,6 +527,307 @@ function configurerDragAndDrop() {
         const dt = e.dataTransfer;
         const files = dt.files;
         uploaderFichiers(files);
+    }
+}
+
+// ==================== INITIALISATION ====================
+
+// Variable pour l'intervalle de rafraîchissement PDF
+let pdfRefreshInterval = null;
+
+// Initialiser l'auto-actualisation du statut PDF (appelée depuis afficherFichiers)
+function initPdfAutoRefresh() {
+    // Nettoyer l'intervalle précédent s'il existe
+    if (pdfRefreshInterval) {
+        clearInterval(pdfRefreshInterval);
+    }
+    
+    // Charger une première fois
+    chargerPdfStatus();
+    
+    // Puis actualiser toutes les 5 secondes
+    pdfRefreshInterval = setInterval(() => {
+        chargerPdfStatus();
+    }, 5000);
+}
+
+// ==================== FONCTIONS PDF SYNCHRONISÉ ====================
+
+// Variables de zoom PDF
+let pdfZoomLevel = 100;
+let pdfScrollPosition = 0;
+const MIN_ZOOM = 50;
+const MAX_ZOOM = 200;
+const ZOOM_STEP = 10;
+
+// Charger le statut PDF actuel
+async function chargerPdfStatus() {
+    try {
+        const response = await fetch('/api/pdf/status');
+        const data = await response.json();
+        
+        console.log('📊 Statut PDF reçu:', data);
+        
+        const statusDiv = document.getElementById('pdf-status');
+        const pageInfo = document.getElementById('pdf-page-info');
+        const prevBtn = document.getElementById('pdf-prev-btn');
+        const nextBtn = document.getElementById('pdf-next-btn');
+        const zoomInBtn = document.getElementById('pdf-zoom-in-btn');
+        const zoomOutBtn = document.getElementById('pdf-zoom-out-btn');
+        const resetZoomBtn = document.getElementById('pdf-reset-zoom-btn');
+        
+        // Vérifier que tous les éléments existent (au cas où la fonction soit appelée avant que le HTML soit créé)
+        if (!statusDiv || !pageInfo || !prevBtn || !nextBtn) {
+            console.log('Éléments PDF non trouvés dans le DOM');
+            return;
+        }
+        
+        if (data.success && data.file) {
+            statusDiv.innerHTML = `📄 <strong>${data.file}</strong> - PDF synchronisé actif`;
+            statusDiv.style.background = '#d4edda';
+            statusDiv.style.color = '#155724';
+            
+            pageInfo.textContent = `Page ${data.page}/${data.totalPages}`;
+            
+            prevBtn.disabled = data.page <= 1;
+            nextBtn.disabled = data.page >= data.totalPages;
+            zoomInBtn.disabled = false;
+            zoomOutBtn.disabled = false;
+            resetZoomBtn.disabled = false;
+            
+            // Charger l'aperçu du PDF
+            await chargerAperçuPdf(data.file, data.page, pdfZoomLevel);
+        } else {
+            statusDiv.innerHTML = 'Aucun PDF actif';
+            statusDiv.style.background = '#f8f9fa';
+            statusDiv.style.color = '#6c757d';
+            
+            pageInfo.textContent = 'Page --/--';
+            prevBtn.disabled = true;
+            nextBtn.disabled = true;
+            zoomInBtn.disabled = true;
+            zoomOutBtn.disabled = true;
+            resetZoomBtn.disabled = true;
+            
+            // Effacer l'aperçu
+            const previewDiv = document.getElementById('pdf-preview');
+            if (previewDiv) {
+                previewDiv.innerHTML = '<p style="color: #999; text-align: center;">Aucun PDF sélectionné</p>';
+            }
+        }
+    } catch (error) {
+        console.error('Erreur chargement statut PDF:', error);
+    }
+}
+
+// Charger et afficher l'aperçu du PDF
+async function chargerAperçuPdf(fileName, pageNumber, zoom) {
+    try {
+        const previewDiv = document.getElementById('pdf-preview');
+        if (!previewDiv) {
+            console.log('Élément PDF preview non trouvé');
+            return;
+        }
+        
+        // Créer une iframe pour afficher le PDF avec vue.js parameter
+        const pdfUrl = `/fichiers/${encodeURIComponent(fileName)}#page=${pageNumber}&zoom=${zoom}`;
+        
+        previewDiv.innerHTML = `
+            <iframe 
+                id="pdf-viewer-iframe"
+                src="${pdfUrl}" 
+                style="
+                    width: 100%; 
+                    height: 100%; 
+                    border: none; 
+                    border-radius: 6px;
+                    display: block;
+                "
+                allow="fullscreen">
+            </iframe>
+        `;
+    } catch (error) {
+        console.error('Erreur chargement aperçu PDF:', error);
+        const previewDiv = document.getElementById('pdf-preview');
+        if (previewDiv) {
+            previewDiv.innerHTML = '<p style="color: #d32f2f; text-align: center;">Erreur lors du chargement du PDF</p>';
+        }
+    }
+}
+
+// Démarrer la synchronisation PDF
+async function pdfStartSync(fileName) {
+    console.log('🔄 Démarrage synchronisation PDF:', fileName);
+    console.log('📦 Type du fileName:', typeof fileName);
+    console.log('📦 Valeur du fileName:', JSON.stringify(fileName));
+    
+    if (!fileName || fileName.trim() === '') {
+        console.error('❌ Nom du fichier vide!');
+        alert('❌ Erreur: nom du fichier vide');
+        return;
+    }
+    
+    try {
+        const payload = { file: fileName, page: 1 };
+        console.log('📤 Envoi de la requête avec payload:', JSON.stringify(payload));
+        
+        const response = await fetch('/api/pdf/page', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        
+        console.log('📡 Réponse API:', response.status, response.statusText);
+        const data = await response.json();
+        console.log('📄 Données reçues:', data);
+        
+        if (data.success) {
+            pdfZoomLevel = 100;
+            console.log('✅ PDF synchronisé avec succès!');
+            chargerPdfStatus();
+            alert(`✅ PDF synchronisé : ${fileName}\nLes clients voient maintenant la page 1`);
+        } else {
+            console.log('❌ Erreur API:', data.message);
+            alert('❌ Erreur lors du démarrage de la synchronisation PDF: ' + (data.message || 'Unknown'));
+        }
+    } catch (error) {
+        console.error('❌ Erreur démarrage sync PDF:', error);
+        alert('❌ Erreur de connexion');
+    }
+}
+
+// Zoomer
+function pdfZoomIn() {
+    if (pdfZoomLevel < MAX_ZOOM) {
+        pdfZoomLevel += ZOOM_STEP;
+        updatePdfZoom();
+    }
+}
+
+// Dézoom
+function pdfZoomOut() {
+    if (pdfZoomLevel > MIN_ZOOM) {
+        pdfZoomLevel -= ZOOM_STEP;
+        updatePdfZoom();
+    }
+}
+
+// Réinitialiser le zoom
+function pdfResetZoom() {
+    pdfZoomLevel = 100;
+    updatePdfZoom();
+}
+
+// Mettre à jour le zoom et l'affichage
+async function updatePdfZoom() {
+    const zoomLevel = document.getElementById('pdf-zoom-level');
+    if (zoomLevel) {
+        zoomLevel.textContent = `${pdfZoomLevel}%`;
+    }
+    
+    // Envoyer le changement de zoom au serveur via Socket.IO
+    if (typeof adminSocket !== 'undefined' && adminSocket) {
+        adminSocket.emit('pdf-zoom-change', { zoom: pdfZoomLevel });
+    }
+    
+    // Mettre à jour l'iframe avec le nouveau zoom
+    try {
+        const response = await fetch('/api/pdf/status');
+        const data = await response.json();
+        
+        if (data.success && data.file) {
+            await chargerAperçuPdf(data.file, data.page, pdfZoomLevel);
+        }
+    } catch (error) {
+        console.error('Erreur mise à jour zoom:', error);
+    }
+}
+
+// Changer de page PDF
+async function pdfChangePage(page) {
+    try {
+        const response = await fetch('/api/pdf/page', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ page: page })
+        });
+        
+        const data = await response.json();
+        if (data.success) {
+            chargerPdfStatus();
+        } else {
+            alert('❌ Page invalide');
+        }
+    } catch (error) {
+        console.error('Erreur changement page PDF:', error);
+    }
+}
+
+// Page précédente
+function pdfPrevPage() {
+    fetch('/api/pdf/prev', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                chargerPdfStatus();
+            } else {
+                alert('❌ Impossible d\'aller à la page précédente');
+            }
+        })
+        .catch(error => {
+            console.error('Erreur page précédente:', error);
+        });
+}
+
+// Page suivante
+function pdfNextPage() {
+    fetch('/api/pdf/next', { method: 'POST' })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                chargerPdfStatus();
+            } else {
+                alert('❌ Impossible d\'aller à la page suivante');
+            }
+        })
+        .catch(error => {
+            console.error('Erreur page suivante:', error);
+        });
+}
+
+// Arrêter la synchronisation PDF
+async function pdfStopSync() {
+    try {
+        const statusDiv = document.getElementById('pdf-status');
+        const pageInfo = document.getElementById('pdf-page-info');
+        const prevBtn = document.getElementById('pdf-prev-btn');
+        const nextBtn = document.getElementById('pdf-next-btn');
+        const zoomInBtn = document.getElementById('pdf-zoom-in-btn');
+        const zoomOutBtn = document.getElementById('pdf-zoom-out-btn');
+        const resetZoomBtn = document.getElementById('pdf-reset-zoom-btn');
+        const previewDiv = document.getElementById('pdf-preview');
+        
+        // Vérifier l'existence avant d'accéder
+        if (statusDiv) {
+            statusDiv.innerHTML = 'Synchronisation arrêtée';
+            statusDiv.style.background = '#fff3cd';
+            statusDiv.style.color = '#856404';
+        }
+        
+        if (pageInfo) pageInfo.textContent = 'Page --/--';
+        if (prevBtn) prevBtn.disabled = true;
+        if (nextBtn) nextBtn.disabled = true;
+        if (zoomInBtn) zoomInBtn.disabled = true;
+        if (zoomOutBtn) zoomOutBtn.disabled = true;
+        if (resetZoomBtn) resetZoomBtn.disabled = true;
+        
+        if (previewDiv) {
+            previewDiv.innerHTML = '<p style="color: #999; text-align: center;">PDF arrêté</p>';
+        }
+        
+        alert('⏹️ Synchronisation PDF arrêtée\nLes clients retournent à la rotation normale des médias');
+    } catch (error) {
+        console.error('Erreur arrêt sync PDF:', error);
     }
 }
 

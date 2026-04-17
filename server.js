@@ -28,6 +28,12 @@ let currentDisplayMode = 'documents';
 // Page à afficher sur les clients Raspberry : 'documents', 'camera', 'meteo', 'pronote', 'horloge'
 let currentDisplayPage = 'documents';
 
+// Synchronisation PDF
+let currentPdfFile = null; // Nom du fichier PDF actuel
+let currentPdfPage = 1; // Page actuelle du PDF
+let totalPdfPages = 0; // Nombre total de pages du PDF
+let pdfZoomLevel = 100; // Niveau de zoom du PDF (en %)
+
 let ffmpegProcess = null;
 
 function nettoyerHls() {
@@ -148,7 +154,43 @@ function logEvent(level, message, details = '') {
     fs.appendFileSync(logFile, logMessage);
 }
 
-// Middleware pour logger les requêtes
+// ===================== FONCTIONS PDF SYNCHRONISÉ =====================
+
+// Fonction pour définir la page PDF actuelle
+function setPdfPage(file, page) {
+    console.log('🔧 setPdfPage appelée avec:', { file, page, type_file: typeof file });
+    
+    if (!file || file === '' || file === 'null') {
+        console.log('❌ Fichier invalide ou vide');
+        return false;
+    }
+    
+    if (page < 1) {
+        console.log('❌ Page invalide:', page);
+        return false;
+    }
+    
+    // Pour l'instant, on simule le nombre total de pages
+    // TODO: analyser le PDF pour obtenir le vrai nombre de pages
+    if (totalPdfPages === 0) {
+        totalPdfPages = 10; // Valeur par défaut, à remplacer par l'analyse réelle du PDF
+    }
+    
+    if (page > totalPdfPages) {
+        console.log('❌ Page dépassant le total:', page, '>', totalPdfPages);
+        return false;
+    }
+    
+    console.log('✅ Définition du PDF:', { file, page, totalPages: totalPdfPages });
+    currentPdfFile = file;
+    currentPdfPage = page;
+    
+    broadcastPdfSync();
+    logEvent('INFO', 'Page PDF changée', { file, page, totalPages: totalPdfPages });
+    return true;
+}
+
+// ===================== FIN SYSTÈME DE LOGS =====================
 app.use((req, res, next) => {
     logEvent('INFO', `Requête ${req.method}`, { url: req.path, ip: req.ip });
     next();
@@ -161,6 +203,10 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(publicDir));
 app.use('/hls', express.static(hlsDir));
+
+// Route pour servir les fichiers PDF et autres documents
+const dossierFichiersDefault = path.join(__dirname, 'fichiers');
+app.use('/fichiers', express.static(process.env.DOSSIER_FICHIERS || dossierFichiersDefault));
 
 // Configuration multer pour l'upload de fichiers
 const storage = multer.diskStorage({
@@ -243,6 +289,19 @@ function broadcastDisplayPage() {
     });
 }
 
+// Synchronisation PDF
+function broadcastPdfSync() {
+    displayClients.forEach(clientId => {
+        io.to(clientId).emit('pdf-sync', {
+            file: currentPdfFile,
+            page: currentPdfPage,
+            totalPages: totalPdfPages,
+            zoom: pdfZoomLevel,
+            timestamp: new Date().toISOString()
+        });
+    });
+}
+
 function setDisplayPage(page) {
     const pagesValides = ['documents', 'camera', 'meteo', 'pronote', 'horloge'];
     if (!pagesValides.includes(page)) return false;
@@ -257,6 +316,11 @@ function setDisplayPage(page) {
 
     if (currentDisplayPage === 'documents' || currentDisplayPage === 'camera') {
         broadcastMediasList();
+    }
+
+    // Démarrer automatiquement le flux caméra si la page est "camera"
+    if (currentDisplayPage === 'camera') {
+        demarrerFluxCamera();
     }
 
     return true;
@@ -280,6 +344,15 @@ io.on('connection', (socket) => {
         if (currentDisplayPage === 'documents' || currentDisplayPage === 'camera') {
             broadcastMediasList();
         }
+        // Envoyer aussi l'état PDF actuel
+        if (currentPdfFile) {
+            socket.emit('pdf-sync', {
+                file: currentPdfFile,
+                page: currentPdfPage,
+                totalPages: totalPdfPages,
+                timestamp: new Date().toISOString()
+            });
+        }
     });
 
     socket.on('change-display-page', (data) => {
@@ -288,6 +361,30 @@ io.on('connection', (socket) => {
             socket.emit('display-page-changed', { page: currentDisplayPage, timestamp: new Date().toISOString() });
         } else {
             socket.emit('error', { message: 'Page d\'affichage invalide' });
+        }
+    });
+
+    socket.on('pdf-zoom-change', (data) => {
+        if (data && typeof data.zoom === 'number') {
+            pdfZoomLevel = Math.max(50, Math.min(200, data.zoom)); // Limiter entre 50 et 200%
+            console.log('🔍 Zoom PDF changé à:', pdfZoomLevel + '%');
+            broadcastPdfSync(); // Diffuser le nouveau zoom à tous les clients
+        }
+    });
+
+    socket.on('pdf-next-page', (data) => {
+        if (currentPdfFile && currentPdfPage < totalPdfPages) {
+            currentPdfPage++;
+            console.log('📄 Page PDF avancée à:', currentPdfPage);
+            broadcastPdfSync();
+        }
+    });
+
+    socket.on('pdf-prev-page', (data) => {
+        if (currentPdfFile && currentPdfPage > 1) {
+            currentPdfPage--;
+            console.log('📄 Page PDF reculée à:', currentPdfPage);
+            broadcastPdfSync();
         }
     });
 
@@ -593,8 +690,16 @@ app.get('/api/fichiers', async (req, res) => {
             
             if (stats.isFile()) {
                 const ext = path.extname(fichier).toLowerCase();
-                const type = extensionsVideos.includes(ext) ? 'video' : 
-                            extensionsDocuments.includes(ext) ? 'document' : 'autre';
+                let type = 'autre';
+                if (extensionsVideos.includes(ext)) {
+                    type = 'video';
+                } else if (extensionsDocuments.includes(ext)) {
+                    if (ext === '.pdf') {
+                        type = 'application/pdf';
+                    } else {
+                        type = 'document';
+                    }
+                }
                 
                 fichiersAvecInfos.push({
                     nom: fichier,
@@ -946,15 +1051,14 @@ app.get('/api/display-mode', (req, res) => {
 app.post('/api/display-mode', express.json(), (req, res) => {
     const { mode } = req.body;
     if (mode === 'documents' || mode === 'camera') {
-        currentDisplayMode = mode;
-        logEvent('INFO', 'Mode d\'affichage changé', { mode });
-        io.emit('display-mode-changed', { mode });
-        // Notifier les clients Raspberry du changement de mode
-        broadcastMediasList();
-        res.json({ success: true, mode });
-    } else {
-        res.status(400).json({ success: false, message: 'Mode invalide' });
+        // Changer le mode => appliquer la page correspondante aux clients
+        if (setDisplayPage(mode)) {
+            logEvent('INFO', 'Mode d\'affichage changé', { mode });
+            res.json({ success: true, mode });
+            return;
+        }
     }
+    res.status(400).json({ success: false, message: 'Mode invalide' });
 });
 
 app.get('/api/display-page', (req, res) => {
@@ -971,6 +1075,59 @@ app.post('/api/display-page', express.json(), (req, res) => {
         res.json({ success: true, page: currentDisplayPage, mode: currentDisplayMode });
     } else {
         res.status(400).json({ success: false, message: 'Page d\'affichage invalide' });
+    }
+});
+
+// API pour la synchronisation PDF
+app.get('/api/pdf/status', (req, res) => {
+    res.json({
+        success: true,
+        file: currentPdfFile,
+        page: currentPdfPage,
+        totalPages: totalPdfPages
+    });
+});
+
+app.post('/api/pdf/page', express.json(), (req, res) => {
+    console.log('📨 Route POST /api/pdf/page reçue');
+    console.log('   Headers:', req.headers);
+    console.log('   Body:', JSON.stringify(req.body));
+    
+    const { file, page } = req.body;
+    console.log('   Extraction: file =', JSON.stringify(file), ', page =', page, ', type page:', typeof page);
+    
+    if (!file) {
+        console.log('❌ Pas de fichier dans la requête');
+        return res.status(400).json({ success: false, message: 'Pas de fichier' });
+    }
+    
+    const pageInt = parseInt(page);
+    console.log('   pageInt parsed:', pageInt);
+    
+    if (setPdfPage(file, pageInt)) {
+        console.log('✅ PDF page set successfully! Réponse:', { success: true, file: currentPdfFile, page: currentPdfPage, totalPages: totalPdfPages });
+        res.json({ success: true, file: currentPdfFile, page: currentPdfPage, totalPages: totalPdfPages });
+    } else {
+        console.log('❌ Échec de setPdfPage');
+        res.status(400).json({ success: false, message: 'Page PDF invalide' });
+    }
+});
+
+app.post('/api/pdf/next', (req, res) => {
+    if (currentPdfFile && currentPdfPage < totalPdfPages) {
+        setPdfPage(currentPdfFile, currentPdfPage + 1);
+        res.json({ success: true, file: currentPdfFile, page: currentPdfPage, totalPages: totalPdfPages });
+    } else {
+        res.status(400).json({ success: false, message: 'Impossible d\'avancer' });
+    }
+});
+
+app.post('/api/pdf/prev', (req, res) => {
+    if (currentPdfFile && currentPdfPage > 1) {
+        setPdfPage(currentPdfFile, currentPdfPage - 1);
+        res.json({ success: true, file: currentPdfFile, page: currentPdfPage, totalPages: totalPdfPages });
+    } else {
+        res.status(400).json({ success: false, message: 'Impossible de reculer' });
     }
 });
 

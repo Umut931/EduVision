@@ -200,6 +200,10 @@ function afficherControlesAffichage() {
         <div style="padding: 20px; text-align: center;">
             <h2>Contrôles d'affichage pour les clients</h2>
             <p>Choisissez ce que les Raspberry clients doivent afficher :</p>
+            <p style="color: #666; font-size: 0.9em; margin-top: 10px;">
+                <strong>Adresse serveur :</strong> ${window.location.host}<br>
+                Utilisez cette adresse sur vos Raspberry Pi clients
+            </p>
             
             <div style="display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 30px;">
                 <button id="btn-mode-documents" class="btn-camera" style="padding: 20px; font-size: 1.1em; min-width: 140px;">

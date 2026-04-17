@@ -63,6 +63,12 @@
         let currentDisplayPage = 'documents';
         let socket = null;
 
+        // Variables pour la synchronisation PDF
+        let currentPdfFile = null;
+        let currentPdfPage = 1;
+        let totalPdfPages = 0;
+        let pdfZoomLevel = 100;
+
         function stopMediaRotation() {
             if (mediaInterval) {
                 clearTimeout(mediaInterval);
@@ -102,6 +108,13 @@
             if (currentDisplayPage === 'camera') {
                 stopMediaRotation();
                 renderCameraPage();
+                return;
+            }
+
+            // Si on a un PDF synchronisé, l'afficher au lieu de la rotation de médias
+            if (currentDisplayPage === 'documents' && currentPdfFile) {
+                stopMediaRotation();
+                renderPdfPage(currentPdfFile, currentPdfPage);
                 return;
             }
 
@@ -208,6 +221,119 @@
             document.getElementById('media-container').innerHTML = '<iframe src="/camera-page.html" style="width:100%; height:100%; border:none;"></iframe>';
         }
 
+        function renderPdfPage(file, page) {
+            if (!file) {
+                document.getElementById('media-container').innerHTML = '<div id="no-media" style="color: #999; text-align: center;">Aucun PDF sélectionné</div>';
+                return;
+            }
+
+            const container = document.getElementById('media-container');
+            // Ajouter un timestamp pour forcer le rechargement du PDF
+            const timestamp = Date.now();
+            const pdfUrl = `/api/fichiers/lecture/${encodeURIComponent(file)}?t=${timestamp}#page=${page}&zoom=${pdfZoomLevel}`;
+            
+            // Créer l'interface PDF complète avec contrôles
+            container.innerHTML = `
+                <div style="width: 100%; height: 100%; display: flex; flex-direction: column; background: #1a1a1a; color: white;">
+                    <!-- En-tête PDF -->
+                    <div style="background: #0a0a0a; padding: 15px; border-bottom: 2px solid #28a745; text-align: center;">
+                        <div style="font-size: 1.2em; font-weight: bold;">📄 ${file}</div>
+                        <div style="font-size: 0.9em; color: #999; margin-top: 5px;">Page ${page}/${totalPdfPages}</div>
+                    </div>
+                    
+                    <!-- Zone d'affichage PDF -->
+                    <div style="flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; background: #2a2a2a; padding: 20px;">
+                        <iframe id="pdf-iframe" src="${pdfUrl}" 
+                                style="width: 100%; height: 100%; border: none; transform: scale(${pdfZoomLevel / 100}); transform-origin: top center;" 
+                                type="application/pdf">
+                        </iframe>
+                    </div>
+                    
+                    <!-- Barre d'outils inférieure -->
+                    <div style="background: #0a0a0a; padding: 15px; border-top: 2px solid #28a745; display: flex; justify-content: center; align-items: center; gap: 15px; flex-wrap: wrap;">
+                        <!-- Contrôles de zoom -->
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <button style="background: #667eea; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9em;" onclick="clientPdfZoomOut()">🔍− Zoom−</button>
+                            <span style="min-width: 60px; text-align: center; font-weight: bold;" id="client-zoom-level">${pdfZoomLevel}%</span>
+                            <button style="background: #667eea; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9em;" onclick="clientPdfZoomIn()">Zoom+ 🔍</button>
+                            <button style="background: #6c757d; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9em;" onclick="clientPdfResetZoom()">↺ Reset</button>
+                        </div>
+                        
+                        <!-- Contrôles de pagination -->
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <button style="background: #6c757d; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9em;" onclick="clientPdfPrevPage()" ${page <= 1 ? 'disabled' : ''}>⬅️ Précédent</button>
+                            <span style="min-width: 80px; text-align: center; font-weight: bold;" id="client-page-info">Page ${page}/${totalPdfPages}</span>
+                            <button style="background: #6c757d; color: white; border: none; padding: 8px 12px; border-radius: 4px; cursor: pointer; font-size: 0.9em;" onclick="clientPdfNextPage()" ${page >= totalPdfPages ? 'disabled' : ''}>Suivant ➡️</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+        
+        function clientPdfZoomIn() {
+            if (pdfZoomLevel < 200) {
+                pdfZoomLevel += 10;
+                console.log('🔍 Client Zoom IN:', pdfZoomLevel);
+                if (socket && typeof socket.emit === 'function') {
+                    console.log('📤 Envoi pdf-zoom-change:', pdfZoomLevel);
+                    socket.emit('pdf-zoom-change', { zoom: pdfZoomLevel });
+                } else {
+                    console.warn('⚠️ Socket non disponible pour zoom');
+                    renderPdfPage(currentPdfFile, currentPdfPage);
+                }
+            }
+        }
+        
+        function clientPdfZoomOut() {
+            if (pdfZoomLevel > 50) {
+                pdfZoomLevel -= 10;
+                console.log('🔍 Client Zoom OUT:', pdfZoomLevel);
+                if (socket && typeof socket.emit === 'function') {
+                    console.log('📤 Envoi pdf-zoom-change:', pdfZoomLevel);
+                    socket.emit('pdf-zoom-change', { zoom: pdfZoomLevel });
+                } else {
+                    console.warn('⚠️ Socket non disponible pour zoom');
+                    renderPdfPage(currentPdfFile, currentPdfPage);
+                }
+            }
+        }
+        
+        function clientPdfResetZoom() {
+            pdfZoomLevel = 100;
+            console.log('🔍 Client Zoom RESET:', pdfZoomLevel);
+            if (socket && typeof socket.emit === 'function') {
+                console.log('📤 Envoi pdf-zoom-change:', pdfZoomLevel);
+                socket.emit('pdf-zoom-change', { zoom: pdfZoomLevel });
+            } else {
+                console.warn('⚠️ Socket non disponible pour zoom');
+                renderPdfPage(currentPdfFile, currentPdfPage);
+            }
+        }
+        
+        function clientPdfNextPage() {
+            if (currentPdfPage < totalPdfPages) {
+                console.log('📄 Client Next Page - envoi au serveur');
+                if (socket && typeof socket.emit === 'function') {
+                    console.log('📤 Envoi pdf-next-page');
+                    socket.emit('pdf-next-page', {});
+                } else {
+                    console.warn('⚠️ Socket non disponible pour next');
+                }
+            }
+        }
+        
+        function clientPdfPrevPage() {
+            if (currentPdfPage > 1) {
+                console.log('📄 Client Prev Page - envoi au serveur');
+                if (socket && typeof socket.emit === 'function') {
+                    console.log('📤 Envoi pdf-prev-page');
+                    socket.emit('pdf-prev-page', {});
+                } else {
+                    console.warn('⚠️ Socket non disponible pour prev');
+                }
+            }
+        }
+
         function afficherMedia(index) {
             const container = document.getElementById('media-container');
             if (medias.length === 0) {
@@ -274,6 +400,25 @@
         socket.on('display-page-changed', (data) => {
             if (data && data.page) {
                 renderDisplayPage(data.page);
+            }
+        });
+
+        socket.on('display-mode-changed', (data) => {
+            if (data && data.mode) {
+                renderDisplayPage(data.mode);
+            }
+        });
+
+        socket.on('pdf-sync', (data) => {
+            if (data) {
+                currentPdfFile = data.file;
+                currentPdfPage = data.page || 1;
+                totalPdfPages = data.totalPages || 0;
+                pdfZoomLevel = data.zoom || 100;
+
+                if (currentDisplayPage === 'documents' && currentPdfFile) {
+                    renderPdfPage(currentPdfFile, currentPdfPage);
+                }
             }
         });
 
