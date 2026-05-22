@@ -21,7 +21,6 @@ function mettreAJourHeure() {
 }
 
 function afficherHorloge() {
-    setClientDisplayPage('horloge');
     entrerModePleinEcran('🕐 Horloge');
     const contenu = document.getElementById('contenu-plein-ecran');
     
@@ -31,16 +30,24 @@ function afficherHorloge() {
     }
     
     contenu.innerHTML = `
-        <div class="horloge-fullscreen">
-            <div id="contenu-horloge" class="horloge-heure-large">
+        <div class="horloge-fullscreen" style="display: flex; align-items: center; justify-content: center; height: 80vh;">
+            <div id="contenu-horloge" class="horloge-heure-large" style="font-size: 18vw; font-weight: bold; color: #fff; text-shadow: 0 4px 32px rgba(10,18,36,0.25); letter-spacing: 0.08em;">
                 --:--:--
             </div>
         </div>
     `;
     
     // Mettre à jour immédiatement et puis chaque seconde
-    mettreAJourHeure();
-    intervalId = setInterval(mettreAJourHeure, 1000);
+    function updateFullHorloge() {
+        const maintenant = new Date();
+        const heures = String(maintenant.getHours()).padStart(2, '0');
+        const minutes = String(maintenant.getMinutes()).padStart(2, '0');
+        const secondes = String(maintenant.getSeconds()).padStart(2, '0');
+        const heure = `${heures}:${minutes}:${secondes}`;
+        document.getElementById('contenu-horloge').textContent = heure;
+    }
+    updateFullHorloge();
+    intervalId = setInterval(updateFullHorloge, 1000);
 }
 
 function basculerFormat() {

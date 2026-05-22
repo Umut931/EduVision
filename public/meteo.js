@@ -1,35 +1,22 @@
-function afficherMeteo() {
-    setClientDisplayPage('meteo');
-    entrerModePleinEcran('🌤️ Météo de Paris');
-    const contenu = document.getElementById('contenu-plein-ecran');
-    contenu.innerHTML = '<div class="loading"><div class="spinner"></div><p>Chargement de la météo...</p></div>';
+function afficherMeteo(cible, modeAuto = false) {
+    if (!cible) {
+        entrerModePleinEcran('🌤️ Météo de Paris');
+        cible = document.getElementById('contenu-plein-ecran');
+        // Scroll activé en mode normal
+        cible.style.overflow = '';
+    } else if (modeAuto) {
+        // Scroll désactivé en mode défilement automatique
+        cible.style.overflow = 'hidden';
+    }
+    cible.innerHTML = '<div class="loading"><div class="spinner"></div><p>Chargement de la météo...</p></div>';
 
-    // Récupérer les données météo et capteurs en parallèle
-    const weatherPromise = fetch('http://api.weatherapi.com/v1/forecast.json?key=4334e8450c28434cbb774244262701&q=Paris&days=3')
-        .then(response => response.json());
-
-    const sensorsPromise = fetch('/api/sensors')
+    fetch('http://api.weatherapi.com/v1/forecast.json?key=4334e8450c28434cbb774244262701&q=Paris&days=3')
         .then(response => response.json())
-        .catch(error => {
-            console.warn('Capteurs non disponibles:', error.message);
-            return {
-                success: false,
-                data: {
-                    temperature: '--',
-                    humidity: '--',
-                    air_quality: '--',
-                    motion: 0,
-                    timestamp: Date.now()
-                }
-            };
-        });
+        .then(data => {
+            const current = data.current;
+            const location = data.location;
+            const forecast = data.forecast.forecastday;
 
-    Promise.all([weatherPromise, sensorsPromise])
-        .then(([weatherData, sensorData]) => {
-            const current = weatherData.current;
-            const location = weatherData.location;
-            const forecast = weatherData.forecast.forecastday;
-            
             // Fonction pour obtenir l'icône de météo appropriée
             const getWeatherIcon = (condition) => {
                 const text = condition.toLowerCase();
@@ -42,18 +29,16 @@ function afficherMeteo() {
                 if (text.includes('overcast')) return '🌫️';
                 return '🌤️';
             };
-            
-            contenu.innerHTML = `
+
+            cible.innerHTML = `
                 <div class="meteo-container">
                     <div class="meteo-header">
                         <h1 style="margin: 0 0 5px 0; font-size: 1.8em;">${location.name}</h1>
-                        
-                    
+                    </div>
                     <div class="meteo-current">
                         <div class="current-icon" style="font-size: 4em; margin-bottom: 10px;">${getWeatherIcon(current.condition.text)}</div>
                         <div class="current-main">
                             <div class="current-temp">${current.temp_c}°C</div>
-                            
                             <div class="current-feels">Ressenti: ${current.feelslike_c}°C</div>
                         </div>
                     </div>
@@ -61,15 +46,15 @@ function afficherMeteo() {
                     <div class="meteo-grid">
                         <div class="meteo-stat">
                             <div class="stat-label">💧 Humidité</div>
-                            <div class="stat-value">${sensorData.data && sensorData.data.humidity !== '--' ? sensorData.data.humidity + '%' : '--'}</div>
+                            <div class="stat-value">${current.humidity}%</div>
                         </div>
                         <div class="meteo-stat">
-                            <div class="stat-label">🌬️ Qualité d'air</div>
-                            <div class="stat-value">${sensorData.data && sensorData.data.air_quality !== '--' ? sensorData.data.air_quality : '--'}</div>
+                            <div class="stat-label">💨 Qualité de l'aire</div>
+                            <div class="stat-value">${current.wind_kph} km/h</div>
                         </div>
                         <div class="meteo-stat">
-                            <div class="stat-label">🌡️ Température de la classe</div>
-                            <div class="stat-value">${sensorData.data && sensorData.data.temperature !== '--' ? sensorData.data.temperature + '°C' : '--'}</div>
+                            <div class="stat-label">⚡ Températue Salle</div>
+                            <div class="stat-value">${current.gust_kph} km/h</div>
                         </div>
                         <div class="meteo-stat">
                             <div class="stat-label">👁️ Visibilité</div>

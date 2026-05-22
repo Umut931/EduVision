@@ -51,12 +51,14 @@ function getSalleClean(field, fallback = "—") {
     return '';
 }
 
-function afficherPronote() {
+function afficherPronote(cible = null, modeAuto = false) {
     setClientDisplayPage('pronote');
-    entrerModePleinEcran('📅 Emploi du Temps');
-    const contenu = document.getElementById('contenu-plein-ecran');
+    if (!cible) {
+        entrerModePleinEcran('📅 Emploi du Temps');
+        cible = document.getElementById('contenu-plein-ecran');
+    }
 
-    contenu.innerHTML = `
+    cible.innerHTML = `
         <div class="loading">
             <div class="spinner"></div>
             <p>Chargement de l'emploi du temps...</p>

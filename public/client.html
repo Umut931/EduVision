@@ -69,6 +69,13 @@
         let totalPdfPages = 0;
         let pdfZoomLevel = 100;
 
+        // Annotations PDF : canvas overlay temps réel
+        let annotationCanvas = null;
+        let annotationCtx = null;
+        let isReceivingStroke = false;
+        let prevStrokeX = 0, prevStrokeY = 0;
+        let drawPointCount = 0;
+
         function stopMediaRotation() {
             if (mediaInterval) {
                 clearTimeout(mediaInterval);
@@ -221,6 +228,62 @@
             document.getElementById('media-container').innerHTML = '<iframe src="/camera-page.html" style="width:100%; height:100%; border:none;"></iframe>';
         }
 
+        function getOrCreateAnnotationCanvas() {
+            if (!annotationCanvas) {
+                annotationCanvas = document.createElement('canvas');
+                annotationCanvas.style.cssText = 'position:fixed;top:0;left:0;pointer-events:none;z-index:9999;';
+                annotationCanvas.width = window.innerWidth;
+                annotationCanvas.height = window.innerHeight;
+                document.body.appendChild(annotationCanvas);
+                annotationCtx = annotationCanvas.getContext('2d');
+                annotationCtx.lineCap = 'round';
+                annotationCtx.lineJoin = 'round';
+                console.log('✅ [CLIENT] Canvas annotation créé', annotationCanvas.width, 'x', annotationCanvas.height);
+            }
+            return annotationCanvas;
+        }
+
+        function clearAnnotationOverlay() {
+            if (annotationCtx && annotationCanvas) {
+                annotationCtx.clearRect(0, 0, annotationCanvas.width, annotationCanvas.height);
+            }
+            isReceivingStroke = false;
+        }
+
+        // Retourne le rect de la zone PDF réelle, sans CSS transform (stable à tout zoom)
+        function getPdfRect() {
+            // Préférer pdf-inner-container (pas de CSS transform) plutôt que l'iframe
+            // qui peut avoir transform:scale() appliqué pour le zoom — getBoundingClientRect
+            // inclurait ce scale et donnerait des coords visuelles incorrectes
+            const inner = document.getElementById('pdf-inner-container');
+            if (inner) {
+                const r = inner.getBoundingClientRect();
+                if (r.width > 10 && r.height > 10) return r;
+            }
+            const iframe = document.getElementById('pdf-iframe');
+            if (iframe) {
+                // Lire les dimensions layout (sans transform) via offsetWidth/offsetHeight
+                const rect = iframe.getBoundingClientRect();
+                // Si scale != 1, getBoundingClientRect est la zone visuelle transformée
+                // On préfère les dimensions du container parent dans ce cas
+                if (rect.width > 10 && rect.height > 10) return rect;
+            }
+            return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+        }
+
+        // Redimensionne le canvas d'annotation lors d'un resize de la fenêtre
+        window.addEventListener('resize', () => {
+            if (annotationCanvas) {
+                // Sauvegarder le contenu actuel
+                const imageData = annotationCtx.getImageData(0, 0, annotationCanvas.width, annotationCanvas.height);
+                annotationCanvas.width = window.innerWidth;
+                annotationCanvas.height = window.innerHeight;
+                annotationCtx.lineCap = 'round';
+                annotationCtx.lineJoin = 'round';
+                annotationCtx.putImageData(imageData, 0, 0);
+            }
+        });
+
         function renderPdfPage(file, page) {
             if (!file) {
                 document.getElementById('media-container').innerHTML = '<div id="no-media" style="color: #999; text-align: center;">Aucun PDF sélectionné</div>';
@@ -242,11 +305,14 @@
                     </div>
                     
                     <!-- Zone d'affichage PDF -->
-                    <div style="flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; background: #2a2a2a; padding: 20px;">
-                        <iframe id="pdf-iframe" src="${pdfUrl}" 
-                                style="width: 100%; height: 100%; border: none; transform: scale(${pdfZoomLevel / 100}); transform-origin: top center;" 
-                                type="application/pdf">
-                        </iframe>
+                    <div style="flex: 1; display: flex; align-items: center; justify-content: center; overflow: auto; background: #2a2a2a; padding: 20px; position: relative;">
+                        <div id="pdf-inner-container" style="position: relative; width: 100%; height: 100%;">
+                            <iframe id="pdf-iframe" src="${pdfUrl}"
+                                    style="width: 100%; height: 100%; border: none; transform: scale(${pdfZoomLevel / 100}); transform-origin: top center;"
+                                    type="application/pdf">
+                            </iframe>
+                            <!-- L'overlay d'annotations est un <img> injecté dynamiquement par showAnnotationOverlay() -->
+                        </div>
                     </div>
                     
                     <!-- Barre d'outils inférieure -->
@@ -268,6 +334,7 @@
                     </div>
                 </div>
             `;
+            
         }
         
         function clientPdfZoomIn() {
@@ -384,9 +451,32 @@
             }
         }
 
+        // Polling HTTP : détecte les redémarrages serveur et recharge la page automatiquement
+        // Fonctionne même si le Pi a l'ancien client.html (pas besoin de WebSocket)
+        let knownServerStartTime = null;
+        setInterval(async () => {
+            try {
+                const res = await fetch('/api/server-time');
+                const data = await res.json();
+                if (knownServerStartTime === null) {
+                    knownServerStartTime = data.startTime;
+                } else if (knownServerStartTime !== data.startTime) {
+                    console.log('🔄 [CLIENT] Serveur redémarré, rechargement...');
+                    window.location.reload();
+                }
+            } catch { /* serveur indisponible, on réessaie dans 10s */ }
+        }, 10000);
+
         socket = io();
 
+        let isReconnecting = false;
         socket.on('connect', () => {
+            if (isReconnecting) {
+                // Le serveur a redémarré — recharger la page pour obtenir le HTML frais
+                console.log('🔄 [CLIENT] Reconnexion détectée — rechargement de la page');
+                window.location.reload();
+                return;
+            }
             console.log('Connecté au serveur WebSocket');
             socket.emit('register-display-client', { screenId });
         });
@@ -411,10 +501,19 @@
 
         socket.on('pdf-sync', (data) => {
             if (data) {
+                const prevFile = currentPdfFile;
+                const prevPage = currentPdfPage;
+
                 currentPdfFile = data.file;
                 currentPdfPage = data.page || 1;
                 totalPdfPages = data.totalPages || 0;
                 pdfZoomLevel = data.zoom || 100;
+
+                // Effacer les annotations uniquement si le fichier ou la page change (pas le zoom)
+                const pageChanged = prevFile !== currentPdfFile || prevPage !== currentPdfPage;
+                if (pageChanged) {
+                    clearAnnotationOverlay();
+                }
 
                 if (currentDisplayPage === 'documents' && currentPdfFile) {
                     renderPdfPage(currentPdfFile, currentPdfPage);
@@ -422,7 +521,69 @@
             }
         });
 
+        // Réception des traits en temps réel (coordonnées normalisées 0-1)
+        socket.on('pdf-draw-start', (data) => {
+            console.log('📩 [CLIENT] pdf-draw-start reçu', data ? `file:${data.file} page:${data.page}` : 'null',
+                        '| local file:', currentPdfFile, 'page:', currentPdfPage);
+            if (!data) return;
+            // Si on connaît déjà le fichier/page courant, vérifier la correspondance
+            if (currentPdfFile && (data.file !== currentPdfFile || parseInt(data.page) !== parseInt(currentPdfPage))) {
+                console.warn('⚠️ [CLIENT] Trait ignoré — fichier/page ne correspondent pas',
+                    `reçu: ${data.file}@${data.page} | local: ${currentPdfFile}@${currentPdfPage}`);
+                return;
+            }
+            const canvas = getOrCreateAnnotationCanvas();
+            // Mapper les coordonnées sur la zone PDF réelle (pas le window entier)
+            const pdfRect = getPdfRect();
+            const scale = pdfRect.height / 400;
+            annotationCtx.strokeStyle = data.color || '#FF0000';
+            annotationCtx.lineWidth = Math.max(2, (data.width || 3) * scale);
+            prevStrokeX = pdfRect.left + data.x * pdfRect.width;
+            prevStrokeY = pdfRect.top  + data.y * pdfRect.height;
+            isReceivingStroke = true;
+            drawPointCount = 0;
+            // Point de départ visible
+            annotationCtx.beginPath();
+            annotationCtx.arc(prevStrokeX, prevStrokeY, Math.max(3, (data.width || 3) * scale), 0, Math.PI * 2);
+            annotationCtx.fillStyle = data.color || '#FF0000';
+            annotationCtx.fill();
+            console.log('✏️ [CLIENT] Début trait — pdfRect', pdfRect.width.toFixed(0)+'x'+pdfRect.height.toFixed(0),
+                'offset', pdfRect.left.toFixed(0)+','+pdfRect.top.toFixed(0),
+                '| dot at', prevStrokeX.toFixed(0), prevStrokeY.toFixed(0));
+        });
+
+        socket.on('pdf-draw-point', (data) => {
+            if (!isReceivingStroke || !annotationCtx || !annotationCanvas) return;
+            const pdfRect = getPdfRect();
+            const x = pdfRect.left + data.x * pdfRect.width;
+            const y = pdfRect.top  + data.y * pdfRect.height;
+            annotationCtx.beginPath();
+            annotationCtx.moveTo(prevStrokeX, prevStrokeY);
+            annotationCtx.lineTo(x, y);
+            annotationCtx.stroke();
+            prevStrokeX = x;
+            prevStrokeY = y;
+            drawPointCount++;
+        });
+
+        socket.on('pdf-draw-end', () => {
+            isReceivingStroke = false;
+            console.log('✅ [CLIENT] Trait reçu —', drawPointCount, 'point(s) dessiné(s)');
+        });
+
+        socket.on('pdf-clear-annotations', (data) => {
+            if (data && data.file === currentPdfFile && data.page === currentPdfPage) {
+                clearAnnotationOverlay();
+            }
+        });
+
+        socket.on('client-reload', () => {
+            console.log('🔄 [CLIENT] Rechargement forcé reçu — rechargement de la page...');
+            window.location.reload();
+        });
+
         socket.on('disconnect', () => {
+            isReconnecting = true;
             console.log('Déconnecté du serveur WebSocket');
             document.getElementById('media-container').innerHTML = '<div id="no-media">Connexion perdue...</div>';
         });

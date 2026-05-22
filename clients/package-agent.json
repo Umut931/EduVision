@@ -1,0 +1,15 @@
+{
+  "name": "eduvision-system-agent",
+  "version": "1.0.0",
+  "description": "EduVision system agent — companion process on each client Raspberry Pi",
+  "main": "system-agent.js",
+  "scripts": {
+    "start": "node system-agent.js"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.8.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}

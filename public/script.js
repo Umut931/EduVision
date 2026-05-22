@@ -70,6 +70,11 @@ function quitterModePleinEcran() {
     const containerPleinEcran = document.getElementById('container-plein-ecran');
     const header = document.getElementById('plein-ecran-header');
 
+    // Arrêter le défilement automatique si actif
+    if (typeof arreterDefilementAuto === 'function') {
+        arreterDefilementAuto();
+    }
+
     // Retourner à la vue normale
     containerPrincipal.style.display = 'block';
     containerPleinEcran.style.display = 'none';
@@ -253,7 +258,7 @@ function chargerModeActuel() {
                 document.getElementById('btn-mode-camera').style.background = data.mode === 'camera' ? '#667eea' : '';
             }
         })
-        .catch(err => {
+        .catch(() => {
             document.getElementById('status-mode').innerHTML = 'Erreur de chargement du mode';
         });
 }
@@ -273,9 +278,22 @@ function changerModeAffichage(mode) {
             alert('Erreur : ' + data.message);
         }
     })
-    .catch(err => {
+    .catch(() => {
         alert('Erreur de changement de mode');
     });
 }
 
-window.addEventListener('load', initAdminSocket);
+window.addEventListener('load', () => {
+    initAdminSocket();
+    initDashboardButtons();
+    // Initialiser les listeners de contrôle système (branché sur adminSocket)
+    if (typeof initSystemControl === 'function') initSystemControl();
+});
+
+function initDashboardButtons() {
+    const btnFichiers = document.getElementById('btn-fichiers');
+    if (btnFichiers) btnFichiers.onclick = afficherFichiers;
+
+    const btnDisplayMode = document.getElementById('btn-display-mode');
+    if (btnDisplayMode) btnDisplayMode.onclick = afficherControlesAffichage;
+}

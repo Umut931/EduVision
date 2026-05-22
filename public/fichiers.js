@@ -15,6 +15,7 @@ function afficherFichiers() {
                 <div id="sync-area" style="border: 2px solid #667eea; border-radius: 10px; padding: 20px; text-align: center; background: #f0f8ff;">
                     <p style="margin: 0; color: #667eea; font-weight: bold;">🔄 Synchronisation</p>
                     <button id="sync-btn" class="btn-camera" style="margin-top: 10px; background: #667eea; color: white; font-size: 0.9em;">Synchroniser Raspberry</button>
+                    <button id="reload-clients-btn" class="btn-camera" style="margin-top: 8px; background: #e67e22; color: white; font-size: 0.9em;" title="Force les écrans clients à recharger la page">↺ Recharger les écrans</button>
                 </div>
                 
                 <div id="status-area" style="border: 2px solid #666; border-radius: 10px; padding: 20px; text-align: center; background: #1a1a1a;">
@@ -57,6 +58,7 @@ function afficherFichiers() {
                     <span id="pdf-page-info" style="font-weight: bold; min-width: 120px; text-align: center;">Page --/--</span>
                     <button id="pdf-next-btn" class="btn-camera" style="background: #6c757d;" onclick="pdfNextPage()" disabled>Suivant ➡️</button>
                     <button id="pdf-stop-btn" class="btn-camera" style="background: #dc3545;" onclick="pdfStopSync()">⏹️ Arrêter</button>
+                    <button id="pdf-clear-annotations-btn" class="btn-camera" style="background: #ff9800;" onclick="clearPdfAnnotations()" title="Effacer les annotations">🗑️ Effacer dessin</button>
                 </div>
             </div>
 
@@ -85,6 +87,16 @@ function afficherFichiers() {
         input.click();
     };
     
+    // Bouton rechargement forcé des clients
+    document.getElementById('reload-clients-btn').onclick = () => {
+        if (typeof adminSocket !== 'undefined' && adminSocket) {
+            adminSocket.emit('admin-reload-clients');
+            alert('↺ Demande de rechargement envoyée aux écrans clients');
+        } else {
+            alert('❌ Socket admin non connecté');
+        }
+    };
+
     // Bouton de synchronisation
     document.getElementById('sync-btn').onclick = async () => {
         const syncBtn = document.getElementById('sync-btn');
@@ -560,6 +572,10 @@ const MIN_ZOOM = 50;
 const MAX_ZOOM = 200;
 const ZOOM_STEP = 10;
 
+// Variables de suivi PDF (fichier et page en cours)
+let currentPdfPage = 1;
+let currentPdfFile = null;
+
 // Charger le statut PDF actuel
 async function chargerPdfStatus() {
     try {
@@ -588,15 +604,24 @@ async function chargerPdfStatus() {
             statusDiv.style.color = '#155724';
             
             pageInfo.textContent = `Page ${data.page}/${data.totalPages}`;
-            
+
+            // Comparer AVANT de mettre à jour (sinon la comparaison est toujours false)
+            const fileChanged = currentPdfFile !== data.file || currentPdfPage !== data.page;
+
+            // Mettre à jour le suivi local du fichier et de la page
+            currentPdfFile = data.file;
+            currentPdfPage = data.page;
+
             prevBtn.disabled = data.page <= 1;
             nextBtn.disabled = data.page >= data.totalPages;
             zoomInBtn.disabled = false;
             zoomOutBtn.disabled = false;
             resetZoomBtn.disabled = false;
-            
-            // Charger l'aperçu du PDF
-            await chargerAperçuPdf(data.file, data.page, pdfZoomLevel);
+
+            if (fileChanged) {
+                pdfAnnotations = [];
+                await chargerAperçuPdf(data.file, data.page, pdfZoomLevel);
+            }
         } else {
             statusDiv.innerHTML = 'Aucun PDF actif';
             statusDiv.style.background = '#f8f9fa';
@@ -608,6 +633,9 @@ async function chargerPdfStatus() {
             zoomInBtn.disabled = true;
             zoomOutBtn.disabled = true;
             resetZoomBtn.disabled = true;
+            
+            // Nettoyer les annotations quand on arrête le PDF
+            pdfAnnotations = [];
             
             // Effacer l'aperçu
             const previewDiv = document.getElementById('pdf-preview');
@@ -621,6 +649,22 @@ async function chargerPdfStatus() {
 }
 
 // Charger et afficher l'aperçu du PDF
+// ==================== VARIABLES PDF ANNOTATIONS ====================
+
+// Store for PDF annotations (strokes) — points stockés en coordonnées normalisées [0-1]
+let pdfAnnotations = [];
+let isDrawingOnPdf = false;
+let pdfDrawingCanvas = null;
+let pdfDrawingCtx = null;
+let lastX = 0;
+let lastY = 0;
+let lastDrawPointTime = 0; // throttle mousemove → WebSocket
+const STROKE_COLOR = '#FF0000';
+const STROKE_WIDTH = 3;
+const DRAW_THROTTLE_MS = 16; // ~60fps max pour pdf-draw-point
+
+// ==================== FONCTIONS PDF DRAWINGS ====================
+
 async function chargerAperçuPdf(fileName, pageNumber, zoom) {
     try {
         const previewDiv = document.getElementById('pdf-preview');
@@ -633,19 +677,40 @@ async function chargerAperçuPdf(fileName, pageNumber, zoom) {
         const pdfUrl = `/fichiers/${encodeURIComponent(fileName)}#page=${pageNumber}&zoom=${zoom}`;
         
         previewDiv.innerHTML = `
-            <iframe 
-                id="pdf-viewer-iframe"
-                src="${pdfUrl}" 
-                style="
-                    width: 100%; 
-                    height: 100%; 
-                    border: none; 
-                    border-radius: 6px;
-                    display: block;
-                "
-                allow="fullscreen">
-            </iframe>
+            <div style="position: relative; width: 100%; height: 100%;">
+                <iframe 
+                    id="pdf-viewer-iframe"
+                    src="${pdfUrl}" 
+                    style="
+                        width: 100%; 
+                        height: 100%; 
+                        border: none; 
+                        border-radius: 6px;
+                        display: block;
+                    "
+                    allow="fullscreen">
+                </iframe>
+                <!-- Canvas overlay pour les annotations -->
+                <canvas
+                    id="pdf-drawing-canvas"
+                    style="
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        width: 100%;
+                        height: 100%;
+                        z-index: 10;
+                        cursor: crosshair;
+                        border-radius: 6px;
+                        background: rgba(255,255,255,0);
+                    ">
+                </canvas>
+            </div>
         `;
+        
+        // Initialiser le canvas de dessin
+        await initPdfDrawingCanvas();
+        
     } catch (error) {
         console.error('Erreur chargement aperçu PDF:', error);
         const previewDiv = document.getElementById('pdf-preview');
@@ -654,6 +719,153 @@ async function chargerAperçuPdf(fileName, pageNumber, zoom) {
         }
     }
 }
+
+// Initialiser le canvas de dessin
+async function initPdfDrawingCanvas() {
+    const previewDiv = document.getElementById('pdf-preview');
+    const canvas = document.getElementById('pdf-drawing-canvas');
+    
+    if (!canvas || !previewDiv) return;
+    
+    // Définir la taille du canvas
+    canvas.width = previewDiv.clientWidth;
+    canvas.height = previewDiv.clientHeight;
+    
+    pdfDrawingCanvas = canvas;
+    pdfDrawingCtx = canvas.getContext('2d');
+    
+    // Redessiner les annotations précédentes
+    redrawPdfAnnotations();
+    
+    // Event listeners pour le dessin
+    canvas.addEventListener('mousedown', startPdfDrawing);
+    canvas.addEventListener('mousemove', drawOnPdf);
+    canvas.addEventListener('mouseup', stopPdfDrawing);
+    canvas.addEventListener('mouseout', stopPdfDrawing);
+    
+    console.log('✅ Canvas de dessin PDF initialisé', canvas.width, 'x', canvas.height);
+}
+
+// Démarrer le dessin
+function startPdfDrawing(e) {
+    isDrawingOnPdf = true;
+    lastDrawPointTime = 0; // Réinitialiser le throttle pour ce nouveau trait
+    const rect = pdfDrawingCanvas.getBoundingClientRect();
+    lastX = e.clientX - rect.left;
+    lastY = e.clientY - rect.top;
+
+    // Stocker en coordonnées normalisées [0-1] pour redraw correct après zoom
+    const normX = rect.width  > 0 ? lastX / rect.width  : 0;
+    const normY = rect.height > 0 ? lastY / rect.height : 0;
+
+    pdfAnnotations.push({
+        type: 'stroke',
+        points: [{ x: normX, y: normY }],
+        color: STROKE_COLOR,
+        width: STROKE_WIDTH
+    });
+
+    if (typeof adminSocket !== 'undefined' && adminSocket) {
+        console.log('🖊️ Début trait →', normX.toFixed(3), normY.toFixed(3), '| file:', currentPdfFile, 'page:', currentPdfPage);
+        adminSocket.emit('pdf-draw-start', {
+            x: normX,
+            y: normY,
+            color: STROKE_COLOR,
+            width: STROKE_WIDTH,
+            file: currentPdfFile,
+            page: currentPdfPage
+        });
+    } else {
+        console.warn('⚠️ adminSocket non disponible, trait non envoyé');
+    }
+}
+
+// Dessiner sur le PDF
+function drawOnPdf(e) {
+    if (!isDrawingOnPdf || !pdfDrawingCtx) return;
+
+    const rect = pdfDrawingCanvas.getBoundingClientRect();
+    const currentX = e.clientX - rect.left;
+    const currentY = e.clientY - rect.top;
+
+    const normX = rect.width  > 0 ? currentX / rect.width  : 0;
+    const normY = rect.height > 0 ? currentY / rect.height : 0;
+
+    if (pdfAnnotations.length > 0) {
+        // Stocker en normalisé pour redraw correct sur zoom
+        pdfAnnotations[pdfAnnotations.length - 1].points.push({ x: normX, y: normY });
+    }
+
+    redrawPdfAnnotations();
+
+    // Throttle à ~60fps pour éviter de flood le WebSocket
+    const now = Date.now();
+    if (typeof adminSocket !== 'undefined' && adminSocket && rect.width > 0
+        && (now - lastDrawPointTime) >= DRAW_THROTTLE_MS) {
+        lastDrawPointTime = now;
+        adminSocket.emit('pdf-draw-point', { x: normX, y: normY });
+    }
+}
+
+// Arrêter le dessin
+function stopPdfDrawing() {
+    if (!isDrawingOnPdf) return;
+    isDrawingOnPdf = false;
+
+    if (typeof adminSocket !== 'undefined' && adminSocket) {
+        adminSocket.emit('pdf-draw-end', { file: currentPdfFile, page: currentPdfPage });
+        console.log('✅ Trait envoyé aux clients (file:', currentPdfFile, 'page:', currentPdfPage, ')');
+    }
+}
+
+// Redessiner les annotations (points en coordonnées normalisées [0-1])
+function redrawPdfAnnotations() {
+    if (!pdfDrawingCtx || !pdfDrawingCanvas) return;
+
+    const cw = pdfDrawingCanvas.width;
+    const ch = pdfDrawingCanvas.height;
+
+    pdfDrawingCtx.clearRect(0, 0, cw, ch);
+
+    pdfAnnotations.forEach(annotation => {
+        if (annotation.type === 'stroke' && annotation.points.length > 1) {
+            pdfDrawingCtx.strokeStyle = annotation.color;
+            pdfDrawingCtx.lineWidth = annotation.width;
+            pdfDrawingCtx.lineCap = 'round';
+            pdfDrawingCtx.lineJoin = 'round';
+
+            pdfDrawingCtx.beginPath();
+            // Dénormaliser : point normalisé × dimensions canvas courantes
+            pdfDrawingCtx.moveTo(annotation.points[0].x * cw, annotation.points[0].y * ch);
+
+            for (let i = 1; i < annotation.points.length; i++) {
+                pdfDrawingCtx.lineTo(annotation.points[i].x * cw, annotation.points[i].y * ch);
+            }
+
+            pdfDrawingCtx.stroke();
+        }
+    });
+}
+
+// Effacer les annotations
+function clearPdfAnnotations() {
+    pdfAnnotations = [];
+    if (pdfDrawingCtx && pdfDrawingCanvas) {
+        pdfDrawingCtx.clearRect(0, 0, pdfDrawingCanvas.width, pdfDrawingCanvas.height);
+    }
+    
+    // Notifier les clients
+    if (typeof adminSocket !== 'undefined' && adminSocket) {
+        adminSocket.emit('pdf-clear-annotations', {
+            page: currentPdfPage,
+            file: currentPdfFile
+        });
+    }
+    
+    console.log('✳️ Annotations effacées');
+}
+
+// ==================== FIN PDF ANNOTATIONS ====================
 
 // Démarrer la synchronisation PDF
 async function pdfStartSync(fileName) {

@@ -4,10 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gestion Salle 210</title>
-    <meta name="theme-color" content="#0B3A8A">
+    <meta name="theme-color" content="#0b1a2e">
     <link rel="icon" type="image/png" href="/logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
-    <!-- Face API.js pour détection de visage -->
     <script defer src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
 </head>
 <body>
@@ -37,13 +39,19 @@
         </div>
     </div>
 
-    <!-- Header de navigation pour le mode plein écran -->
+     <!-- Header de navigation pour le mode plein écran -->
     <div id="plein-ecran-header" class="plein-ecran-header" style="display: none;">
-        <button class="btn btn-ghost btn-accueil" onclick="afficherAccueil()">🏠 Accueil</button>
+        <button class="btn btn-ghost btn-accueil" onclick="afficherAccueil()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            Accueil
+
+        </button>
         <h2 id="titre-plein-ecran"></h2>
         <div class="header-buttons">
             <button class="btn btn-ghost btn-focus" id="btn-focus" onclick="basculerModeFocus()" style="display: none;" title="Mode focus">🎯 Focus</button>
-            <button class="btn btn-ghost btn-deconnexion" onclick="seDeconnecter()">🚪 Déconnexion</button>
+            <button class="btn btn-ghost btn-deconnexion" onclick="seDeconnecter()">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                Déconnexion</button>
         </div>
     </div>
 
@@ -57,29 +65,17 @@
                 </div>
             </div>
             <div class="app-actions">
-                <button class="btn btn-ghost btn-deconnexion" onclick="seDeconnecter()">🚪 Déconnexion</button>
+                <button class="btn btn-ghost btn-deconnexion" onclick="seDeconnecter()">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+                    Déconnexion
+                </button>
+    
             </div>
         </header>
         
         <section class="dashboard">
         <div class="boutons-container" aria-label="Outils">
-            <button class="bouton meteo" onclick="afficherMeteo()">
-                <div class="icone">🌤️</div>
-                <div class="tile-text">
-                    <div class="tile-title">Météo</div>
-                    <div class="tile-subtitle">Paris</div>
-                </div>
-                <span class="arrow"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span>
-            </button>
-            <button class="bouton pronote" onclick="afficherPronote()">
-                <div class="icone">📅</div>
-                <div class="tile-text">
-                    <div class="tile-title">Emploi du temps</div>
-                    <div class="tile-subtitle">Pronote</div>
-                </div>
-                <span class="arrow"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span>
-            </button>
-            <button class="bouton fichiers" onclick="afficherFichiers()">
+            <button id="btn-fichiers" class="bouton fichiers" onclick="afficherFichiers()">
                 <div class="icone">📁</div>
                 <div class="tile-text">
                     <div class="tile-title">Fichiers</div>
@@ -87,15 +83,7 @@
                 </div>
                 <span class="arrow"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span>
             </button>
-            <button class="bouton horloge" onclick="afficherHorloge()">
-                <div class="icone">🕐</div>
-                <div class="tile-text">
-                    <div class="tile-title" id="heure-affichage">Horloge</div>
-                    <div class="tile-subtitle">Heure actuelle</div>
-                </div>
-                <span class="arrow"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span>
-            </button>
-            <button class="bouton camera" onclick="window.open('camera-page.html', '_blank')">
+            <button id="btn-camera" class="bouton camera" onclick="window.open('camera-page.html', '_blank')">
                 <div class="icone">📷</div>
                 <div class="tile-text">
                     <div class="tile-title">Caméra</div>
@@ -103,11 +91,27 @@
                 </div>
                 <span class="arrow"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span>
             </button>
-            <button class="bouton display-mode" onclick="afficherControlesAffichage()">
+            <button id="btn-defilement-auto" class="bouton defilement-auto" onclick="lancerDefilementAuto()">
+                <div class="icone">🔄</div>
+                <div class="tile-text">
+                    <div class="tile-title">Défilement auto</div>
+                    <div class="tile-subtitle">Météo / Pronote / Événements</div>
+                </div>
+                <span class="arrow"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span>
+            </button>
+            <button id="btn-display-mode" class="bouton display-mode" onclick="afficherControlesAffichage()">
                 <div class="icone">📺</div>
                 <div class="tile-text">
                     <div class="tile-title">Affichage Clients</div>
                     <div class="tile-subtitle">Documents / Caméra</div>
+                </div>
+                <span class="arrow"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span>
+            </button>
+            <button id="btn-system-control" class="bouton system-control" onclick="afficherSystemControl()">
+                <div class="icone">⚙️</div>
+                <div class="tile-text">
+                    <div class="tile-title">Contrôle Système</div>
+                    <div class="tile-subtitle">Veille / Arrêt / Reboot RPi</div>
                 </div>
                 <span class="arrow"><svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></span>
             </button>
@@ -130,5 +134,7 @@
     <script src="fichiers.js"></script>
     <script src="horloge.js"></script>
     <script src="camera.js"></script>
+    <script src="defilement-auto.js"></script>
+    <script src="system-control.js"></script>
 </body>
 </html>

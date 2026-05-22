@@ -11,12 +11,21 @@ const http = require('http');
 const socketIo = require('socket.io');
 const sensorsModule = require('./services/sensors');
 
+// PDF parsing
+let pdfParse = null;
+try {
+    pdfParse = require('pdf-parse');
+} catch (err) {
+    console.log('[PDF-PARSE] ⚠️ pdf-parse non disponible, utilisation heuristique');
+}
+
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
     cors: { origin: '*', methods: ['GET', 'POST'] }
 });
 const PORT = 3000;
+const SERVER_START_TIME = Date.now(); // change à chaque redémarrage
 
 const publicDir = path.join(__dirname, 'public');
 const hlsDir = path.join(publicDir, 'hls');
@@ -156,6 +165,58 @@ function logEvent(level, message, details = '') {
 
 // ===================== FONCTIONS PDF SYNCHRONISÉ =====================
 
+// Fonction pour estimer le nombre de pages d'un PDF
+async function estimatePdfPages(fileName) {
+    try {
+        const dossierFichiers = process.env.DOSSIER_FICHIERS || path.join(__dirname, 'fichiers');
+        const cheminPdf = path.join(dossierFichiers, fileName);
+        
+        if (!await fs.pathExists(cheminPdf)) {
+            logEvent('WARNING', 'Fichier PDF non trouvé pour estimation', { fichier: fileName });
+            return 50; // Défaut plus haut
+        }
+        
+        // Essayer d'utiliser pdf-parse pour la détection précise
+        if (pdfParse) {
+            try {
+                const fileBuffer = await fs.readFile(cheminPdf);
+                const pdfData = await pdfParse(fileBuffer);
+                const pages = pdfData.numpages || pdfData.info?.Pages || pdfData.numpages;
+                
+                if (pages && pages > 0) {
+                    logEvent('SUCCESS', '✅ Pages PDF détectées avec pdf-parse', { 
+                        fichier: fileName, 
+                        pages: pages 
+                    });
+                    return pages;
+                }
+            } catch (err) {
+                logEvent('DEBUG', '⚠️ pdf-parse échoué, utilisation heuristique', { 
+                    fichier: fileName, 
+                    erreur: err.message 
+                });
+            }
+        }
+        
+        // Fallback: Heuristique améliorée (beaucoup plus conservative)
+        // Avant: 1 page par 10KB (trop bas)
+        // Maintenant: 1 page par 5KB + minimum de 50 pages
+        const stats = await fs.stat(cheminPdf);
+        let estimatedPages = Math.max(50, Math.ceil(stats.size / 5120));
+        estimatedPages = Math.min(estimatedPages, 500); // Limiter à 500 pages max
+        
+        logEvent('DEBUG', 'Pages PDF estimées (heuristique)', { 
+            fichier: fileName, 
+            tailleBytes: stats.size, 
+            pagesEstimées: estimatedPages 
+        });
+        return estimatedPages;
+    } catch (err) {
+        logEvent('WARNING', 'Erreur estimation pages PDF', { fichier: fileName, erreur: err.message });
+        return 50; // Défaut plus haut en cas d'erreur
+    }
+}
+
 // Fonction pour définir la page PDF actuelle
 function setPdfPage(file, page) {
     console.log('🔧 setPdfPage appelée avec:', { file, page, type_file: typeof file });
@@ -170,10 +231,9 @@ function setPdfPage(file, page) {
         return false;
     }
     
-    // Pour l'instant, on simule le nombre total de pages
-    // TODO: analyser le PDF pour obtenir le vrai nombre de pages
-    if (totalPdfPages === 0) {
-        totalPdfPages = 10; // Valeur par défaut, à remplacer par l'analyse réelle du PDF
+    // Si totalPdfPages est 0 ou n'est pas défini, on utilise une valeur par défaut
+    if (!totalPdfPages || totalPdfPages === 0) {
+        totalPdfPages = 10; // Valeur par défaut
     }
     
     if (page > totalPdfPages) {
@@ -233,6 +293,42 @@ sensorsModule.initializeSensors().catch(err => {
 
 // Ensemble pour tracker les clients Raspberry (display clients)
 let displayClients = new Set();
+
+// ===================== CONTRÔLE SYSTÈME RASPBERRY PI =====================
+// Agents système (Node.js companion tournant sur chaque Pi client)
+// Clé: screenId, valeur: { screenId, ip, hostname, status, socketId|null, connectedAt, lastSeen }
+const knownAgents = new Map();
+const agentSocketIds = new Set(); // socketIds des agents (pas des browsers)
+
+const ALLOWED_SYSTEM_COMMANDS = ['shutdown', 'reboot', 'screen-off', 'screen-on'];
+
+function broadcastAgentUpdate() {
+    const agents = [...knownAgents.values()];
+    io.sockets.sockets.forEach((s) => {
+        if (!agentSocketIds.has(s.id)) {
+            s.emit('system-agents-update', agents);
+        }
+    });
+}
+
+function executeLocalCommand(command) {
+    return new Promise((resolve, reject) => {
+        const CENTRAL_COMMANDS = {
+            'shutdown': { file: 'sudo', args: ['/sbin/shutdown', '-h', 'now'] },
+            'reboot':   { file: 'sudo', args: ['/sbin/reboot'] },
+            'screen-off': { file: '/usr/bin/vcgencmd', args: ['display_power', '0'] },
+            'screen-on':  { file: '/usr/bin/vcgencmd', args: ['display_power', '1'] },
+        };
+        const cmd = CENTRAL_COMMANDS[command];
+        if (!cmd) return reject(new Error('Commande inconnue'));
+        const env = { ...process.env, DISPLAY: ':0' };
+        const proc = spawn(cmd.file, cmd.args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+        let stderr = '';
+        proc.stderr.on('data', d => stderr += d.toString());
+        proc.on('close', code => code === 0 ? resolve() : reject(new Error(stderr.trim() || `Code ${code}`)));
+        proc.on('error', reject);
+    });
+}
 
 // Fonction pour construire et envoyer la liste des médias
 async function broadcastMediasList() {
@@ -331,6 +427,160 @@ io.on('connection', (socket) => {
     logEvent('INFO', 'Client Socket.IO connecté', { id: socket.id });
     sensorClients.add(socket.id);
 
+    // ── Enregistrement agent système (companion Node.js sur Pi client) ──
+    socket.on('register-system-agent', (data) => {
+        if (!data || !data.screenId) return;
+        const screenId = String(data.screenId).substring(0, 32).replace(/[^a-zA-Z0-9_-]/g, '');
+        if (!screenId) return;
+
+        agentSocketIds.add(socket.id);
+
+        const agentInfo = {
+            screenId,
+            ip: data.ip || socket.handshake.address || 'unknown',
+            hostname: data.hostname || screenId,
+            status: 'online',
+            socketId: socket.id,
+            connectedAt: new Date().toISOString(),
+            lastSeen: Date.now(),
+        };
+        knownAgents.set(screenId, agentInfo);
+
+        logEvent('SUCCESS', '🤖 Agent système enregistré', { screenId, ip: agentInfo.ip, socketId: socket.id });
+        socket.emit('agent-registered', { screenId });
+        broadcastAgentUpdate();
+    });
+
+    // ── Heartbeat de l'agent ──
+    socket.on('agent-heartbeat', (data) => {
+        const agent = data?.screenId ? knownAgents.get(data.screenId) : null;
+        if (agent && agent.socketId === socket.id) {
+            agent.lastSeen = Date.now();
+            if (data.status) agent.status = data.status;
+        }
+    });
+
+    // ── Mise à jour de statut émise par l'agent ──
+    socket.on('agent-status-update', (data) => {
+        const agent = data?.screenId ? knownAgents.get(data.screenId) : null;
+        if (agent && agent.socketId === socket.id && data.status) {
+            agent.status = data.status;
+            broadcastAgentUpdate();
+        }
+    });
+
+    // ── Résultat d'une commande système renvoyé par l'agent ──
+    socket.on('system-command-result', (data) => {
+        if (!data) return;
+        logEvent(data.success ? 'SUCCESS' : 'ERROR', '⚙️ Résultat commande système', {
+            screenId: data.screenId, command: data.command,
+            success: data.success, message: data.message
+        });
+
+        const agent = data.screenId ? knownAgents.get(data.screenId) : null;
+        if (agent && agent.socketId === socket.id) {
+            if (data.success) {
+                if (data.command === 'screen-off') agent.status = 'sleeping';
+                else if (data.command === 'screen-on') agent.status = 'online';
+                else if (data.command === 'shutdown') agent.status = 'shutting-down';
+                else if (data.command === 'reboot') agent.status = 'rebooting';
+            } else {
+                agent.status = 'error';
+            }
+            agent.lastSeen = Date.now();
+        }
+        // Retransmettre le résultat à tous les sockets admin (non-agents)
+        io.sockets.sockets.forEach((s) => {
+            if (!agentSocketIds.has(s.id)) s.emit('system-command-result', data);
+        });
+        broadcastAgentUpdate();
+    });
+
+    // ── Commande admin vers les agents clients ──
+    socket.on('admin-system-command', (data) => {
+        if (agentSocketIds.has(socket.id)) return; // les agents ne peuvent pas envoyer des commandes
+        if (!data) return;
+
+        const command = data.command;
+        if (!ALLOWED_SYSTEM_COMMANDS.includes(command)) {
+            socket.emit('system-command-error', { message: `Commande non autorisée: ${command}` });
+            return;
+        }
+
+        const target = data.target || 'all';
+        const commandId = Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
+
+        let targetAgents = [];
+        if (target === 'all') {
+            targetAgents = [...knownAgents.values()].filter(a => a.socketId);
+        } else if (typeof target === 'string') {
+            const a = knownAgents.get(target);
+            if (a && a.socketId) targetAgents = [a];
+        } else if (Array.isArray(target)) {
+            targetAgents = target.map(t => knownAgents.get(t)).filter(a => a && a.socketId);
+        }
+
+        if (targetAgents.length === 0) {
+            socket.emit('system-command-error', { message: 'Aucun agent disponible pour cette cible' });
+            return;
+        }
+
+        // Mise à jour statut préemptive
+        targetAgents.forEach(agent => {
+            if (command === 'shutdown') agent.status = 'shutting-down';
+            else if (command === 'reboot') agent.status = 'rebooting';
+            else if (command === 'screen-off') agent.status = 'sleeping';
+            else if (command === 'screen-on') agent.status = 'waking';
+        });
+
+        targetAgents.forEach(agent => {
+            io.to(agent.socketId).emit('system-command', { commandId, command });
+            logEvent('INFO', `⚙️ Commande système envoyée`, { command, screenId: agent.screenId });
+        });
+
+        broadcastAgentUpdate();
+        socket.emit('system-command-sent', { commandId, count: targetAgents.length });
+    });
+
+    // ── Commande admin vers le Pi central (serveur lui-même) ──
+    socket.on('admin-central-command', (data) => {
+        if (agentSocketIds.has(socket.id)) return;
+        const command = data?.command;
+        if (!ALLOWED_SYSTEM_COMMANDS.includes(command)) {
+            socket.emit('system-command-error', { message: `Commande non autorisée: ${command}` });
+            return;
+        }
+        logEvent('WARNING', `⚙️ Commande centrale reçue: ${command}`);
+
+        if (command === 'shutdown' || command === 'reboot') {
+            // Informer tous les clients avant de s'éteindre
+            io.emit('server-shutdown-notice', { command, message: 'Serveur arrêté par l\'administrateur' });
+            socket.emit('system-command-result', {
+                commandId: 'central', command, screenId: 'central',
+                success: true, message: `Commande ${command} initiée sur le serveur`
+            });
+            setTimeout(() => {
+                executeLocalCommand(command).catch(err =>
+                    logEvent('ERROR', 'Erreur commande centrale', { message: err.message })
+                );
+            }, 1500);
+        } else {
+            executeLocalCommand(command)
+                .then(() => {
+                    socket.emit('system-command-result', {
+                        commandId: 'central', command, screenId: 'central',
+                        success: true, message: 'OK'
+                    });
+                })
+                .catch(err => {
+                    socket.emit('system-command-result', {
+                        commandId: 'central', command, screenId: 'central',
+                        success: false, message: err.message
+                    });
+                });
+        }
+    });
+
     // Envoyer les données actuelles au nouveau client
     const currentState = sensorsModule.getCurrentState();
     socket.emit('sensor_data', currentState);
@@ -350,6 +600,7 @@ io.on('connection', (socket) => {
                 file: currentPdfFile,
                 page: currentPdfPage,
                 totalPages: totalPdfPages,
+                zoom: pdfZoomLevel,
                 timestamp: new Date().toISOString()
             });
         }
@@ -388,12 +639,73 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Listeners pour les annotations PDF
+    socket.on('pdf-annotation', (data, ackCallback) => {
+        if (data && (data.dataUrl || data.annotation)) {
+            console.log('📝 Annotation PDF reçue, diffusion à', displayClients.size, 'client(s) — page:', data.page, 'fichier:', data.file);
+            displayClients.forEach(clientId => {
+                io.to(clientId).emit('pdf-annotation', data);
+            });
+            if (typeof ackCallback === 'function') {
+                ackCallback({ received: true, displayClients: displayClients.size });
+            }
+        }
+    });
+
+    // Streaming temps réel des traits de dessin (coordonnées normalisées)
+    socket.on('pdf-draw-start', (data) => {
+        if (displayClients.size === 0) {
+            console.warn('⚠️ [SERVER] pdf-draw-start reçu mais AUCUN client d\'affichage connecté — trait perdu !');
+        } else {
+            console.log('🖊️ [SERVER] pdf-draw-start reçu → diffusion à', displayClients.size, 'client(s) — file:', data && data.file, 'page:', data && data.page);
+        }
+        displayClients.forEach(clientId => io.to(clientId).emit('pdf-draw-start', data));
+    });
+    socket.on('pdf-draw-point', (data) => {
+        displayClients.forEach(clientId => io.to(clientId).emit('pdf-draw-point', data));
+    });
+    socket.on('pdf-draw-end', (data) => {
+        console.log('✅ [SERVER] pdf-draw-end → diffusion à', displayClients.size, 'client(s)');
+        displayClients.forEach(clientId => io.to(clientId).emit('pdf-draw-end', data));
+    });
+
+    socket.on('pdf-clear-annotations', (data) => {
+        console.log('🗑️ Effacement annotations PDF:', { page: data.page, file: data.file });
+        displayClients.forEach(clientId => {
+            io.to(clientId).emit('pdf-clear-annotations', data);
+        });
+    });
+
+    // Rechargement forcé des écrans clients (utile après mise à jour du code)
+    socket.on('admin-reload-clients', () => {
+        console.log('🔄 Rechargement forcé des clients demandé par admin');
+        displayClients.forEach(clientId => {
+            io.to(clientId).emit('client-reload');
+        });
+    });
+
     // Listener pour les déconnexions
     socket.on('disconnect', () => {
         logEvent('INFO', 'Client Socket.IO déconnecté', { id: socket.id });
         sensorClients.delete(socket.id);
         displayClients.delete(socket.id);
-        
+
+        // Nettoyage agent système
+        if (agentSocketIds.has(socket.id)) {
+            agentSocketIds.delete(socket.id);
+            for (const [screenId, agent] of knownAgents) {
+                if (agent.socketId === socket.id) {
+                    if (agent.status !== 'shutting-down' && agent.status !== 'rebooting') {
+                        agent.status = 'offline';
+                    }
+                    agent.socketId = null;
+                    logEvent('WARNING', '🤖 Agent système déconnecté', { screenId, status: agent.status });
+                    break;
+                }
+            }
+            broadcastAgentUpdate();
+        }
+
         // Arrêter l'interval si aucun client n'est connecté
         if (sensorClients.size === 0 && sensorInterval) {
             clearInterval(sensorInterval);
@@ -462,8 +774,11 @@ app.get('/api/meteo', async (req, res) => {
     }
 });
 
-// Route pour le client
+// Route pour le client — pas de cache pour toujours servir la dernière version
 app.get('/client/:id', (req, res) => {
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.sendFile(path.join(__dirname, 'public', 'client.html'));
 });
 
@@ -844,16 +1159,49 @@ app.post('/api/upload', upload.array('files'), async (req, res) => {
             if (!selectionMediasDuration[nom]) selectionMediasDuration[nom] = 10;
         });
         
+        // 🔄 Vérifier s'il y a un PDF dans les fichiers uploadés
+        let firstPdfFile = null;
+        
+        for (const nom of fichiersUploades) {
+            if (nom.toLowerCase().endsWith('.pdf')) {
+                firstPdfFile = nom;
+                logEvent('INFO', '📄 PDF détecté dans l\'upload', { fichier: nom });
+                
+                // Estimer le nombre de pages du PDF
+                totalPdfPages = await estimatePdfPages(nom);
+                logEvent('INFO', 'Nombre de pages PDF estimé', { fichier: nom, pages: totalPdfPages });
+                
+                // Synchroniser le PDF aux clients Raspberry
+                const success = setPdfPage(nom, 1);
+                if (success) {
+                    logEvent('SUCCESS', '✅ PDF synchronisé avec les clients', { fichier: nom, page: 1, totalPages: totalPdfPages });
+                } else {
+                    logEvent('WARNING', '⚠️ Impossible de synchroniser le PDF', { fichier: nom });
+                }
+                break; // On traite que le premier PDF
+            }
+        }
+        
+        // S'assurer que la page d'affichage est 'documents' pour que les clients voient le PDF ou les médias
+        if (firstPdfFile) {
+            setDisplayPage('documents');
+        }
+        
+        // Notifier tous les clients Raspberry de la nouvelle sélection de médias
+        broadcastMediasList();
+        
         logEvent('SUCCESS', 'Fichiers uploadés et ajoutés à la sélection', { 
             fichiers: fichiersUploades,
             selectionTotale: selectionMedias.length,
+            pdfSynchronisé: firstPdfFile ? firstPdfFile : 'aucun',
             durations: selectionMediasDuration
         });
         
         res.json({ 
             success: true, 
             fichiers: fichiersUploades,
-            selection: selectionMedias 
+            selection: selectionMedias,
+            pdfSynchronisé: firstPdfFile
         });
     } catch (error) {
         logEvent('ERROR', 'Erreur upload fichiers', { message: error.message });
@@ -1041,6 +1389,25 @@ server.on('error', (err) => {
 });
 
 // API pour gérer le mode d'affichage des clients
+// Endpoint utilisé par les clients pour détecter un redémarrage serveur et se recharger
+app.get('/api/server-time', (_req, res) => {
+    res.json({ startTime: SERVER_START_TIME });
+});
+
+// Endpoint de diagnostic : affiche l'état en temps réel (clients connectés, PDF actuel, etc.)
+app.get('/api/diag', (_req, res) => {
+    res.json({
+        displayClientsCount: displayClients.size,
+        displayClientIds: [...displayClients],
+        currentPdfFile,
+        currentPdfPage,
+        totalPdfPages,
+        pdfZoomLevel,
+        currentDisplayPage,
+        serverStartTime: SERVER_START_TIME
+    });
+});
+
 app.get('/api/display-mode', (req, res) => {
     res.json({
         success: true,
@@ -1088,7 +1455,7 @@ app.get('/api/pdf/status', (req, res) => {
     });
 });
 
-app.post('/api/pdf/page', express.json(), (req, res) => {
+app.post('/api/pdf/page', express.json(), async (req, res) => {
     console.log('📨 Route POST /api/pdf/page reçue');
     console.log('   Headers:', req.headers);
     console.log('   Body:', JSON.stringify(req.body));
@@ -1103,6 +1470,13 @@ app.post('/api/pdf/page', express.json(), (req, res) => {
     
     const pageInt = parseInt(page);
     console.log('   pageInt parsed:', pageInt);
+    
+    // Estimer le nombre de pages pour ce PDF
+    totalPdfPages = await estimatePdfPages(file);
+    console.log('   Pages estimées:', totalPdfPages);
+    
+    // Forcer la page d'affichage des clients à 'documents'
+    setDisplayPage('documents');
     
     if (setPdfPage(file, pageInt)) {
         console.log('✅ PDF page set successfully! Réponse:', { success: true, file: currentPdfFile, page: currentPdfPage, totalPages: totalPdfPages });
@@ -1130,6 +1504,44 @@ app.post('/api/pdf/prev', (req, res) => {
         res.status(400).json({ success: false, message: 'Impossible de reculer' });
     }
 });
+
+// ===================== API CONTRÔLE SYSTÈME =====================
+
+// Liste des agents connectés
+app.get('/api/system/agents', (_req, res) => {
+    res.json({ success: true, agents: [...knownAgents.values()] });
+});
+
+// Envoi d'une commande système via HTTP (fallback)
+app.post('/api/system/command', express.json(), (req, res) => {
+    const { command, target } = req.body;
+    if (!ALLOWED_SYSTEM_COMMANDS.includes(command)) {
+        return res.status(400).json({ success: false, message: 'Commande non autorisée' });
+    }
+
+    let targetAgents = [];
+    const t = target || 'all';
+    if (t === 'all') {
+        targetAgents = [...knownAgents.values()].filter(a => a.socketId);
+    } else if (typeof t === 'string') {
+        const a = knownAgents.get(t);
+        if (a && a.socketId) targetAgents = [a];
+    }
+
+    if (targetAgents.length === 0) {
+        return res.status(404).json({ success: false, message: 'Aucun agent disponible' });
+    }
+
+    const commandId = Date.now().toString(36);
+    targetAgents.forEach(agent => {
+        io.to(agent.socketId).emit('system-command', { commandId, command });
+    });
+
+    logEvent('INFO', `⚙️ Commande HTTP système`, { command, targets: targetAgents.map(a => a.screenId) });
+    res.json({ success: true, commandId, count: targetAgents.length });
+});
+
+// ===================== FIN API CONTRÔLE SYSTÈME =====================
 
 // Démarrer le serveur
 server.listen(PORT, () => {
