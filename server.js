@@ -22,7 +22,7 @@ try {
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
-    cors: { origin: '*', methods: ['GET', 'POST'] }
+    cors: { origin: '*', methods: ['GET', 'POST'], credentials: false }
 });
 const PORT = 3000;
 const SERVER_START_TIME = Date.now(); // change à chaque redémarrage
@@ -100,17 +100,30 @@ function demarrerFluxCamera() {
         mjpegBuffer = mjpegBuffer.slice(start);
     });
 
+    let stderrBuffer = '';
     ffmpegProcess.stderr.on('data', (data) => {
-        logEvent('INFO', 'FFmpeg', data.toString());
+        const msg = data.toString();
+        stderrBuffer += msg;
+        logEvent('INFO', 'FFmpeg', msg);
     });
 
     ffmpegProcess.on('error', (err) => {
         logEvent('ERROR', 'Erreur lancement FFmpeg', { message: err.message });
+        io.emit('camera-error', { message: 'FFmpeg introuvable sur ce système.' });
         ffmpegProcess = null;
     });
 
     ffmpegProcess.on('close', (code) => {
         logEvent('WARNING', 'FFmpeg arrêté', { code });
+        const isNetworkError = stderrBuffer.includes('No route to host')
+            || stderrBuffer.includes('Connection refused')
+            || stderrBuffer.includes('Connection timed out')
+            || stderrBuffer.includes('Network is unreachable');
+        if (isNetworkError) {
+            io.emit('camera-error', { message: 'Caméra injoignable (192.168.0.103:554). Vérifiez qu\'elle est allumée et connectée au réseau.' });
+        } else if (code !== 0 && code !== null) {
+            io.emit('camera-error', { message: `Erreur flux caméra (code ${code}). Consultez les logs serveur.` });
+        }
         ffmpegProcess = null;
     });
 }
@@ -262,8 +275,16 @@ app.use((req, res, next) => {
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: false
 }));
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+});
 app.use(express.json());
 app.use(express.static(publicDir));
 app.use('/hls', express.static(hlsDir));
@@ -863,33 +884,17 @@ app.get('/api/pronote', async (req, res) => {
                 if (!estMemeJour(ev.start, jourCible)) continue;
 
                 // Convertir les champs en chaînes de caractères
-                const getSummary = () => {
-                    if (typeof ev.summary === 'string') return ev.summary;
-                    if (ev.summary && ev.summary.value) return ev.summary.value;
-                    if (ev.summary && typeof ev.summary === 'object') {
-                        return JSON.stringify(ev.summary);
-                    }
-                    if (ev.summary) return String(ev.summary);
-                    return 'Cours';
+                // node-ical retourne les champs localisés sous la forme { params: { LANGUAGE: "fr" }, val: "..." }
+                const extractIcalString = (field, fallback) => {
+                    if (!field) return fallback;
+                    if (typeof field === 'string') return field;
+                    if (field.val !== undefined) return String(field.val);
+                    if (field.value !== undefined) return String(field.value);
+                    return fallback;
                 };
-                const getLocation = () => {
-                    if (typeof ev.location === 'string') return ev.location;
-                    if (ev.location && ev.location.value) return ev.location.value;
-                    if (ev.location && typeof ev.location === 'object') {
-                        return JSON.stringify(ev.location);
-                    }
-                    if (ev.location) return String(ev.location);
-                    return 'Non précisée';
-                };
-                const getDescription = () => {
-                    if (typeof ev.description === 'string') return ev.description;
-                    if (ev.description && ev.description.value) return ev.description.value;
-                    if (ev.description && typeof ev.description === 'object') {
-                        return JSON.stringify(ev.description);
-                    }
-                    if (ev.description) return String(ev.description);
-                    return '';
-                };
+                const getSummary = () => extractIcalString(ev.summary, 'Cours');
+                const getLocation = () => extractIcalString(ev.location, 'Non précisée');
+                const getDescription = () => extractIcalString(ev.description, '');
 
                 const summary = getSummary();
                 const location = getLocation();

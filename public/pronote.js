@@ -1,18 +1,21 @@
-// pronote.js (version clean, sans {"params"...})
-
+/**
+ * Extrait une valeur lisible depuis un champ Pronote/iCal.
+ * node-ical peut retourner { params: { LANGUAGE: "fr" }, val: "..." } —
+ * cette fonction normalise tous les cas en une string propre.
+ */
 function getVal(field, fallback = "—") {
     if (field === undefined || field === null) return fallback;
 
-    // Si c'est un objet avec .val, on prend .val
-    if (typeof field === "object" && field.val !== undefined && field.val !== null) {
-        return String(field.val).trim() || fallback;
+    if (typeof field === "object") {
+        const v = field.val !== undefined ? field.val : field.value;
+        return (v !== undefined && v !== null) ? (String(v).trim() || fallback) : fallback;
     }
 
-    // Si c'est une string qui ressemble à du JSON avec "val"
     if (typeof field === "string") {
         const s = field.trim();
-        // Si c'est du JSON, on extrait la valeur
-        if (s.startsWith("{") && s.includes('"val"')) {
+        if (!s) return fallback;
+        // Garde-fou : si le serveur a sérialisé un objet localisé en JSON
+        if (s.charCodeAt(0) === 123 /* { */ && s.includes('"val"')) {
             try {
                 const parsed = JSON.parse(s);
                 if (parsed && parsed.val !== undefined && parsed.val !== null) {
@@ -20,25 +23,10 @@ function getVal(field, fallback = "—") {
                 }
             } catch {}
         }
-        // Si c'est une string qui contient ce motif, on extrait avec une regex
-        const match = s.match(/"val"\s*:\s*"([^"]+)"/);
-        if (match && match[1]) {
-            return match[1].trim();
-        }
-        // Sinon, on retire les accolades et "params" si présents
-        if (s.includes('params') && s.includes('val')) {
-            // On tente d'extraire ce qui suit 'val":'
-            const afterVal = s.split('val')[1];
-            if (afterVal) {
-                const valClean = afterVal.replace(/[:\s"'}]+/g, '').trim();
-                if (valClean.length > 0) return valClean;
-            }
-        }
-        return s.length ? s : fallback;
+        return s;
     }
 
     return String(field).trim() || fallback;
-
 }
 
 function getSalleClean(field, fallback = "—") {

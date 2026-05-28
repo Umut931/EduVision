@@ -43,9 +43,22 @@ function demarrerCamera() {
 
     socket.on('camera-frame', function(data) {
         img.src = 'data:image/jpeg;base64,' + data;
-        if (!cameraActive) {
-            cameraActive = true;
+        cameraActive = true;
+        const err = document.getElementById('camera-error');
+        if (err) err.remove();
+    });
+
+    socket.on('camera-error', function(data) {
+        const container = document.querySelector('.camera-container') || document.getElementById('contenu-plein-ecran');
+        if (!container) return;
+        let err = document.getElementById('camera-error');
+        if (!err) {
+            err = document.createElement('div');
+            err.id = 'camera-error';
+            err.style.cssText = 'background:#7f1d1d;color:#fca5a5;padding:20px 24px;border-radius:10px;margin:20px auto;max-width:600px;font-size:1.1em;text-align:center;';
+            container.prepend(err);
         }
+        err.textContent = '⚠️ ' + (data.message || 'Erreur caméra inconnue.');
     });
 
     fetch('/start-camera')
