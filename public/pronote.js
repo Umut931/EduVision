@@ -69,23 +69,35 @@ function afficherPronote(cible = null, modeAuto = false) {
         .then(response => response.json())
         .then(data => {
             if (!data.success) {
-                contenu.innerHTML = `<div class="erreur">Erreur: ${data.message || "Impossible de charger l'emploi du temps"}</div>`;
+                cible.innerHTML = `<div class="erreur">Erreur: ${data.message || "Impossible de charger l'emploi du temps"}</div>`;
                 return;
             }
 
             const edt = data.data || {};
             let coursList = Array.isArray(edt.cours) ? edt.cours : [];
-            // Trie les cours par heure de début (ex: 08:00, 09:10, 13:10...)
-            coursList = coursList.slice().sort((a, b) => {
-                // On extrait l'heure de début sous forme HH:MM
-                const getHeure = (c) => {
-                    const h = getVal(c.heure);
-                    // Prend la première heure du format "08:00 - 11:10"
-                    const m = h.match(/(\d{1,2}:\d{2})/);
-                    return m ? m[1] : "99:99";
-                };
-                return getHeure(a).localeCompare(getHeure(b));
-            });
+
+            const getHeureDebut = (c) => {
+                const h = getVal(c.heure);
+                const m = h.match(/(\d{1,2}:\d{2})/);
+                return m ? m[1] : "99:99";
+            };
+            const getHeureFin = (c) => {
+                const h = getVal(c.heure);
+                const m = h.match(/\d{1,2}:\d{2}\s*-\s*(\d{1,2}:\d{2})/);
+                return m ? m[1] : "99:99";
+            };
+
+            // Trie les cours par heure de début
+            coursList = coursList.slice().sort((a, b) =>
+                getHeureDebut(a).localeCompare(getHeureDebut(b))
+            );
+
+            // En mode défilement auto, filtre les cours déjà terminés
+            if (modeAuto) {
+                const now = new Date();
+                const heureNow = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+                coursList = coursList.filter(c => getHeureFin(c) > heureNow);
+            }
 
             let html = `
                 <h2>📅 Emploi du Temps - ${edt.jour || ""} ${edt.date || ""}</h2>
@@ -125,9 +137,9 @@ function afficherPronote(cible = null, modeAuto = false) {
                 html += `<div class="erreur" style="background:#fdcb6e;color:#333;margin-top:20px;">${edt.message}</div>`;
             }
 
-            contenu.innerHTML = html;
+            cible.innerHTML = html;
         })
         .catch(error => {
-            contenu.innerHTML = `<div class="erreur">Erreur lors du chargement: ${error.message}</div>`;
+            cible.innerHTML = `<div class="erreur">Erreur lors du chargement: ${error.message}</div>`;
         });
 }

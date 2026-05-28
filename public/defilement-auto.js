@@ -54,6 +54,18 @@ function chargerEvenementsIcs(callback) {
     });
 }
 
+function arreterDefilementAuto() {
+    if (defilementAutoInterval) {
+        clearInterval(defilementAutoInterval);
+        defilementAutoInterval = null;
+    }
+    defilementAutoIndex = 0;
+    // Remet les écrans clients en mode documents
+    if (typeof setClientDisplayPage === 'function') {
+        setClientDisplayPage('documents');
+    }
+}
+
 function lancerDefilementAuto() {
     // Passe en plein écran
     const containerPleinEcran = document.getElementById('container-plein-ecran');
@@ -71,7 +83,7 @@ function lancerDefilementAuto() {
         afficherDefilementAutoPleinEcran();
         if (defilementAutoInterval) clearInterval(defilementAutoInterval);
         defilementAutoInterval = setInterval(() => {
-            defilementAutoIndex = (defilementAutoIndex + 1) % 4;
+            defilementAutoIndex = (defilementAutoIndex + 1) % 5;
             afficherDefilementAutoPleinEcran();
         }, 10000);
     });
@@ -84,6 +96,7 @@ function afficherDefilementAutoPleinEcran() {
     if (!contenuPleinEcran) return;
     if (defilementAutoIndex === 0) {
         // Météo centrée
+        setClientDisplayPage('meteo');
         if (typeof afficherMeteo === 'function') {
             afficherMeteo(contenuPleinEcran, true);
             setTimeout(() => {
@@ -117,6 +130,7 @@ function afficherDefilementAutoPleinEcran() {
         }
     } else if (defilementAutoIndex === 2) {
         // Heure
+        setClientDisplayPage('horloge');
         contenuPleinEcran.style.display = '';
         contenuPleinEcran.style.flexDirection = '';
         contenuPleinEcran.style.alignItems = '';
@@ -124,11 +138,20 @@ function afficherDefilementAutoPleinEcran() {
         afficherHeureDefilementAutoPleinEcran();
     } else if (defilementAutoIndex === 3) {
         // Événements ICS
+        setClientDisplayPage('events');
         contenuPleinEcran.style.display = '';
         contenuPleinEcran.style.flexDirection = '';
         contenuPleinEcran.style.alignItems = '';
         contenuPleinEcran.style.justifyContent = '';
         afficherEvenementsIcs(contenuPleinEcran);
+    } else if (defilementAutoIndex === 4) {
+        // Capteurs
+        setClientDisplayPage('sensors');
+        contenuPleinEcran.style.display = '';
+        contenuPleinEcran.style.flexDirection = '';
+        contenuPleinEcran.style.alignItems = '';
+        contenuPleinEcran.style.justifyContent = '';
+        afficherCapteursDefilementAuto(contenuPleinEcran);
     }
 }
 
@@ -219,6 +242,60 @@ function afficherHeureDefilementAuto() {
     const h = String(now.getHours()).padStart(2, '0');
     const m = String(now.getMinutes()).padStart(2, '0');
     affichage.innerHTML = `<div style="font-size:3em;text-align:center;">${h}:${m}</div><div style="text-align:center;">Heure actuelle</div>`;
+}
+
+function afficherCapteursDefilementAuto(cible) {
+    cible.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:60vh;font-size:1.5em;">Chargement des capteurs...</div>';
+
+    fetch('/api/sensors')
+        .then(r => r.json())
+        .then(res => {
+            const d = res.data || {};
+
+            const getQualiteAir = (val) => {
+                if (val === null || val === undefined) return { label: '—', color: '#aaa' };
+                if (val < 50)  return { label: 'Excellente', color: '#27ae60' };
+                if (val < 100) return { label: 'Bonne', color: '#2ecc71' };
+                if (val < 150) return { label: 'Moyenne', color: '#f39c12' };
+                if (val < 200) return { label: 'Mauvaise', color: '#e67e22' };
+                return { label: 'Très mauvaise', color: '#e74c3c' };
+            };
+
+            const qualite = getQualiteAir(d.air_quality);
+            const temp = d.temperature !== null && d.temperature !== undefined ? d.temperature + '°C' : '—';
+            const hum  = d.humidity    !== null && d.humidity    !== undefined ? d.humidity    + '%'  : '—';
+            const mouvement = d.motion ? '🔴 Mouvement détecté' : '🟢 Aucun mouvement';
+
+            cible.innerHTML = `
+                <div style="padding:40px;width:100%;box-sizing:border-box;">
+                    <h2 style="text-align:center;font-size:2em;margin-bottom:40px;">📡 Capteurs de la salle</h2>
+                    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:24px;max-width:800px;margin:0 auto;">
+                        <div style="background:rgba(255,255,255,0.08);border-radius:16px;padding:30px;text-align:center;">
+                            <div style="font-size:3em;">🌡️</div>
+                            <div style="font-size:2.5em;font-weight:700;margin-top:10px;">${temp}</div>
+                            <div style="opacity:0.7;margin-top:6px;">Température</div>
+                        </div>
+                        <div style="background:rgba(255,255,255,0.08);border-radius:16px;padding:30px;text-align:center;">
+                            <div style="font-size:3em;">💧</div>
+                            <div style="font-size:2.5em;font-weight:700;margin-top:10px;">${hum}</div>
+                            <div style="opacity:0.7;margin-top:6px;">Humidité</div>
+                        </div>
+                        <div style="background:rgba(255,255,255,0.08);border-radius:16px;padding:30px;text-align:center;">
+                            <div style="font-size:3em;">🌬️</div>
+                            <div style="font-size:2em;font-weight:700;margin-top:10px;color:${qualite.color};">${qualite.label}</div>
+                            <div style="opacity:0.7;margin-top:6px;">Qualité de l'air${d.air_quality !== null && d.air_quality !== undefined ? ' (' + d.air_quality + ')' : ''}</div>
+                        </div>
+                        <div style="background:rgba(255,255,255,0.08);border-radius:16px;padding:30px;text-align:center;">
+                            <div style="font-size:3em;">👁️</div>
+                            <div style="font-size:1.4em;font-weight:700;margin-top:10px;">${mouvement}</div>
+                            <div style="opacity:0.7;margin-top:6px;">Détection</div>
+                        </div>
+                    </div>
+                </div>`;
+        })
+        .catch(() => {
+            cible.innerHTML = '<div style="text-align:center;padding:40px;">❌ Erreur lecture des capteurs</div>';
+        });
 }
 
 // Met à jour l'heure en direct si affichée

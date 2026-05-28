@@ -1108,7 +1108,7 @@ async function uploaderFichiers(files) {
 
 // Fonction pour visualiser un fichier
 function visualiserFichier(nomFichier) {
-    window.open(`/api/fichiers/lecture/${encodeURIComponent(nomFichier)}`, '_blank');
+    window.open(SERVER_URL + `/api/fichiers/lecture/${encodeURIComponent(nomFichier)}`, '_blank');
 }
 
 // Fonction pour ajouter à la sélection

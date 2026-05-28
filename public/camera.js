@@ -39,7 +39,7 @@ function demarrerCamera() {
     const img = document.getElementById('camera-img');
     if (!img) return;
 
-    socket = io();
+    socket = io(SERVER_URL);
 
     socket.on('camera-frame', function(data) {
         img.src = 'data:image/jpeg;base64,' + data;

@@ -6,7 +6,7 @@ let adminSocket = null;
 
 function initAdminSocket() {
     if (typeof io !== 'function') return;
-    adminSocket = io();
+    adminSocket = io(SERVER_URL);
     adminSocket.on('connect', () => {
         console.log('Admin WebSocket connecté');
     });

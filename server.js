@@ -259,7 +259,11 @@ app.use((req, res, next) => {
 // ===================== FIN SYSTÈME DE LOGS =====================
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
 app.use(express.json());
 app.use(express.static(publicDir));
 app.use('/hls', express.static(hlsDir));
@@ -399,7 +403,7 @@ function broadcastPdfSync() {
 }
 
 function setDisplayPage(page) {
-    const pagesValides = ['documents', 'camera', 'meteo', 'pronote', 'horloge'];
+    const pagesValides = ['documents', 'camera', 'meteo', 'pronote', 'horloge', 'events', 'sensors'];
     if (!pagesValides.includes(page)) return false;
 
     currentDisplayPage = page;
@@ -737,40 +741,37 @@ app.get('/', (req, res) => {
 app.get('/api/meteo', async (req, res) => {
     try {
         logEvent('INFO', 'Appel API météo');
-        // Utilisation de l'API OpenWeatherMap (gratuite)
-        // Remplacez 'VOTRE_CLE_API' par votre clé API OpenWeatherMap
-        // Vous pouvez obtenir une clé gratuite sur https://openweathermap.org/api
-        const API_KEY = process.env.OPENWEATHER_API_KEY || 'demo_key';
-        const url = `https://api.openweathermap.org/data/2.5/weather?q=Paris,fr&appid=${API_KEY}&units=metric&lang=fr`;
-        
+        const WEATHERAPI_KEY = process.env.WEATHERAPI_KEY || '4334e8450c28434cbb774244262701';
+        const url = `https://api.weatherapi.com/v1/forecast.json?key=${WEATHERAPI_KEY}&q=Paris&days=3&lang=fr`;
         const response = await axios.get(url);
-        logEvent('SUCCESS', 'Données météo récupérées avec succès', { ville: response.data.name });
+        const d = response.data;
+        logEvent('SUCCESS', 'Données météo récupérées', { ville: d.location.name });
         res.json({
             success: true,
             data: {
-                ville: response.data.name,
-                temperature: response.data.main.temp,
-                description: response.data.weather[0].description,
-                humidite: response.data.main.humidity,
-                vent: response.data.wind?.speed || 0,
-                icone: response.data.weather[0].icon
+                ville: d.location.name,
+                temperature: d.current.temp_c,
+                ressenti: d.current.feelslike_c,
+                description: d.current.condition.text,
+                humidite: d.current.humidity,
+                vent: d.current.wind_kph,
+                rafales: d.current.gust_kph,
+                visibilite: d.current.vis_km,
+                condition: d.current.condition.text,
+                previsions: (d.forecast.forecastday || []).map(day => ({
+                    date: day.date,
+                    maxtemp: day.day.maxtemp_c,
+                    mintemp: day.day.mintemp_c,
+                    condition: day.day.condition.text,
+                    humidite: day.day.avghumidity,
+                    vent: day.day.maxwind_kph,
+                    pluie: day.day.totalprecip_mm
+                }))
             }
         });
     } catch (error) {
-        logEvent('ERROR', 'Erreur météo', { message: error.message, code: error.code });
-        // Données de démonstration si l'API n'est pas disponible
-        res.json({
-            success: false,
-            data: {
-                ville: 'Paris',
-                temperature: 'N/A',
-                description: 'Données non disponibles. Configurez votre clé API OpenWeatherMap.',
-                humidite: 'N/A',
-                vent: 'N/A',
-                icone: '01d'
-            },
-            message: 'Utilisez une clé API OpenWeatherMap pour les vraies données'
-        });
+        logEvent('ERROR', 'Erreur météo', { message: error.message });
+        res.json({ success: false, message: error.message });
     }
 });
 
@@ -1445,6 +1446,43 @@ app.post('/api/display-page', express.json(), (req, res) => {
     }
 });
 
+// API pour les événements ICS (proxy serveur pour clients distants)
+const ICS_PRONOTE_URL = 'https://0750711r.index-education.net/pronote/ical/mesinformations.ics?icalsecurise=2B3753E050B35B169E18C7624BB7DA25F623F2DFE26654D9AC4F54FE775E35858B3C20E8ABB0FFD0D9AB7F9C6FF1CC70&version=2025.2.10&param=900A75DF9ED8C62E212781A9E4DCC937';
+app.get('/api/ics-events', async (_req, res) => {
+    const events = [];
+    const parseIcalEvents = (data) => {
+        try {
+            const parsed = ical.parseICS(data);
+            for (const key in parsed) {
+                const evt = parsed[key];
+                if (evt.type === 'VEVENT' && evt.summary) {
+                    events.push({
+                        summary: evt.summary || '',
+                        description: evt.description || '',
+                        dtstart: evt.start ? evt.start.toISOString() : '',
+                        dtend: evt.end ? evt.end.toISOString() : '',
+                        location: evt.location || ''
+                    });
+                }
+            }
+        } catch {}
+    };
+    try {
+        const response = await axios.get(ICS_PRONOTE_URL, { timeout: 5000 });
+        parseIcalEvents(response.data);
+    } catch {}
+    const localIcsPath = path.join(publicDir, 'event.ics');
+    if (fs.existsSync(localIcsPath)) {
+        try { parseIcalEvents(fs.readFileSync(localIcsPath, 'utf8')); } catch {}
+    }
+    const now = new Date();
+    const futureEvents = events
+        .filter(e => e.dtstart && new Date(e.dtstart) >= now)
+        .sort((a, b) => new Date(a.dtstart) - new Date(b.dtstart))
+        .slice(0, 5);
+    res.json({ success: true, events: futureEvents });
+});
+
 // API pour la synchronisation PDF
 app.get('/api/pdf/status', (req, res) => {
     res.json({
@@ -1544,8 +1582,8 @@ app.post('/api/system/command', express.json(), (req, res) => {
 // ===================== FIN API CONTRÔLE SYSTÈME =====================
 
 // Démarrer le serveur
-server.listen(PORT, () => {
-    logEvent('SUCCESS', `Serveur démarré sur http://localhost:${PORT}`);
+server.listen(PORT, '0.0.0.0', () => {
+    logEvent('SUCCESS', `Serveur démarré sur http://192.168.0.105:${PORT}`);
     logEvent('INFO', `Dossier fichiers: ${process.env.DOSSIER_FICHIERS || path.join(__dirname, 'fichiers')}`);
     logEvent('INFO', `Logs sauvegardés dans: ${logsDir}`);
     logEvent('INFO', 'Socket.IO initialisé pour la transmission des capteurs');
